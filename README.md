@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/panel-with-icon.png" alt="The Omacoins panel open under its bar pill, listing the top 5 coins by market cap with 24h movement" width="420">
+  <img src="assets/switch-default-coin.gif" alt="The Omacoins panel opening under its bar pill and listing the top 5 coins by market cap, then each row being clicked in turn to promote that coin to the hero, its price, 24h change and seven-day sparkline redrawing each time" width="480">
 </p>
 
 ## What it shows

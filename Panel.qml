@@ -81,8 +81,28 @@ Panel {
   readonly property int coinCount: Math.max(1, Math.min(25, parseInt(setting("count", 5), 10) || 5))
   readonly property int refreshMinutes: Math.max(1, parseInt(setting("refreshMinutes", 3), 10) || 3)
 
-  readonly property color upColor: "#7fbf7f"
-  readonly property color downColor: "#e07a7a"
+  // Movement colors come from the active theme's palette: every Omarchy theme
+  // defines its own red and green in colors.toml, so up/down shades follow the
+  // theme instead of a fixed pair. The hardcoded values remain as fallbacks
+  // for a theme that lacks those keys.
+  readonly property color fallbackUpColor: "#7fbf7f"
+  readonly property color fallbackDownColor: "#e07a7a"
+  property color upColor: fallbackUpColor
+  property color downColor: fallbackDownColor
+
+  function loadThemeColors(raw) {
+    var up = fallbackUpColor
+    var down = fallbackDownColor
+    var lines = String(raw || "").split("\n")
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\s*(green|red)\s*=\s*["']?(#[0-9A-Fa-f]{6})/)
+      if (!m) continue
+      if (m[1] === "green") up = m[2]
+      else down = m[2]
+    }
+    upColor = up
+    downColor = down
+  }
 
   readonly property string watchlistTitle: customCoins !== "" ? "WATCHLIST" : ("TOP " + coinCount + " BY MARKET CAP")
 
@@ -138,6 +158,26 @@ Panel {
   function badgeFill(change) {
     var c = changeColor(change)
     return Qt.rgba(c.r, c.g, c.b, 0.16)
+  }
+
+  // colors.toml sits behind the current-theme symlink, which a plain file
+  // watch misses when the symlink retargets. Theme switches do push the new
+  // palette into the shell's Color singleton over IPC, so its property
+  // changes are the reliable "theme swapped" signal to re-read the file.
+  FileView {
+    id: themeColorsFile
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    printErrors: false
+    onLoaded: root.loadThemeColors(text())
+    onLoadFailed: root.loadThemeColors("")
+  }
+
+  Connections {
+    target: Color
+    function onForegroundChanged() { themeColorsFile.reload() }
+    function onBackgroundChanged() { themeColorsFile.reload() }
+    function onAccentChanged() { themeColorsFile.reload() }
+    function onUrgentChanged() { themeColorsFile.reload() }
   }
 
   Process {

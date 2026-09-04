@@ -1,7 +1,7 @@
 <h1 align="center">Omacoins</h1>
 
 <p align="center">
-  Coin prices and 24h movement in the Omarchy bar, from CoinGecko's keyless API. No account, no API key.
+  Coin prices and 24h movement in the Omarchy bar, from CoinGecko's keyless API. No account, no API key. Up and down colors come from your Omarchy theme.
 </p>
 
 <p align="center">
@@ -74,6 +74,18 @@ omarchy bar set ber.omacoins count 10
 
 <p align="center">
   <img src="assets/panel-count-10.png" alt="Panel listing the top 10 coins by market cap" width="400">
+</p>
+
+## Matches your theme
+
+Green still means up and red still means down, but the shades are your theme's
+own: Omacoins reads `green` and `red` from the active theme's palette, so the
+badges, fills and sparkline sit in the same colors as the rest of your desktop.
+Switching themes recolors the panel live — nothing to configure, nothing to
+restart.
+
+<p align="center">
+  <img src="assets/panel-themed-colors.png" alt="Panel rendered under a different Omarchy theme, its up and down badges in that theme's own green and red" width="400">
 </p>
 
 ## How it works

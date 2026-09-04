@@ -12,10 +12,11 @@ BarWidget {
   // display: "icon" (default) is a single glyph that saves bar space; "full"
   // shows the lead coin's price and 24h movement in the bar.
   // Set with: omarchy bar set ber.omacoins display full
-  readonly property string displayMode: String(setting("display", "icon")).toLowerCase()
+  readonly property string displayMode: String(setting("display", "icon") || "icon").toLowerCase()
   readonly property bool iconOnly: displayMode === "icon"
   // Default glyph is nf-fa-btc (U+F15A) from the nerd font the bar uses.
-  readonly property string iconGlyph: String(setting("icon", ""))
+  readonly property string defaultIcon: ""
+  readonly property string iconGlyph: String(setting("icon", defaultIcon) || defaultIcon)
 
   function injectPanel() {
     var target = panelLoader.item

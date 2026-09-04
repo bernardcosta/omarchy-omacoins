@@ -236,70 +236,75 @@ Panel {
             font.italic: true
           }
 
-          // ---- Hero: featured coin — big price + change badge on the left,
-          //      HIGH/LOW/MCAP stat columns on the right (weather-hero style).
+          // ---- Hero: featured coin — identity + change badge on the left,
+          //      HIGH/LOW/MCAP stat columns on the right, and the big price
+          //      on its own full-width row beneath (weather-hero style).
           Item {
+            id: heroRow
             visible: !!root.hero
             width: parent.width
-            height: Math.max(heroLeft.height, heroStats.height)
+            height: Math.max(heroIdentity.height, heroStats.height)
 
-            Column {
-              id: heroLeft
+            // Room the featured coin's identity line has before it would run
+            // under the HIGH/LOW/MCAP columns.
+            readonly property real leftRoom: Math.max(0, heroStats.x - heroIdentity.x - Style.space(12))
+
+            TextMetrics {
+              id: heroNameMetrics
+              font: heroName.font
+              text: heroName.text
+            }
+
+            Row {
+              id: heroIdentity
               anchors.left: parent.left
               anchors.leftMargin: Style.space(16)
               anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(4)
-
-              Row {
-                spacing: Style.space(8)
-
-                Text {
-                  id: heroSymbol
-                  text: root.hero ? root.hero.symbol : ""
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.bold: true
-                  font.letterSpacing: 1
-                }
-                Text {
-                  anchors.verticalCenter: heroSymbol.verticalCenter
-                  text: root.hero ? root.hero.name.toUpperCase() : ""
-                  color: Qt.darker(root.bar.foreground, 1.4)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.letterSpacing: 1
-                }
-
-                Rectangle {
-                  visible: root.hero && root.hero.change24h !== null
-                  anchors.verticalCenter: heroSymbol.verticalCenter
-                  width: heroBadgeText.implicitWidth + Style.space(14)
-                  height: heroBadgeText.implicitHeight + Style.space(6)
-                  radius: height / 2
-                  color: root.hero ? root.badgeFill(root.hero.change24h) : "transparent"
-
-                  Text {
-                    id: heroBadgeText
-                    anchors.centerIn: parent
-                    text: root.hero ? Model.formatChange(root.hero.change24h) : ""
-                    color: root.hero ? root.changeColor(root.hero.change24h) : "transparent"
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.bold: true
-                  }
-                }
-              }
+              spacing: Style.space(8)
 
               Text {
-                id: heroPrice
-                text: root.hero ? Model.formatPrice(root.hero.price, root.currencySymbol) : ""
+                id: heroSymbol
+                text: root.hero ? root.hero.symbol : ""
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
-                // Hero price read-out; deliberately oversized, outside the
-                // Style.font.* scale (weather's hero does the same).
-                font.pixelSize: 34
+                font.pixelSize: Style.font.subtitle
                 font.bold: true
+                font.letterSpacing: 1
+              }
+              Text {
+                id: heroName
+                anchors.verticalCenter: heroSymbol.verticalCenter
+                // advanceWidth, not width: the bounding rect comes up a
+                // few px short on letter-spaced text and elides needlessly.
+                width: Math.min(heroNameMetrics.advanceWidth + Style.space(4),
+                                Math.max(0, heroRow.leftRoom - heroSymbol.width
+                                            - heroBadge.width - Style.space(16)))
+                elide: Text.ElideRight
+                text: root.hero ? root.hero.name.toUpperCase() : ""
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.subtitle
+                font.letterSpacing: 1
+              }
+
+              Rectangle {
+                id: heroBadge
+                visible: root.hero && root.hero.change24h !== null
+                anchors.verticalCenter: heroSymbol.verticalCenter
+                width: heroBadgeText.implicitWidth + Style.space(14)
+                height: heroBadgeText.implicitHeight + Style.space(6)
+                radius: height / 2
+                color: root.hero ? root.badgeFill(root.hero.change24h) : "transparent"
+
+                Text {
+                  id: heroBadgeText
+                  anchors.centerIn: parent
+                  text: root.hero ? Model.formatChange(root.hero.change24h) : ""
+                  color: root.hero ? root.changeColor(root.hero.change24h) : "transparent"
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
               }
             }
 
@@ -361,6 +366,26 @@ Panel {
                 }
               }
             }
+          }
+
+          // ---- Big price on its own row: full width at its designed size.
+          //      HorizontalFit stays as the fallback, so it only shrinks if
+          //      the price outgrows the panel itself.
+          Text {
+            id: heroPrice
+            visible: !!root.hero
+            x: Style.space(16)
+            width: parent.width - Style.space(32)
+            text: root.hero ? Model.formatPrice(root.hero.price, root.currencySymbol) : ""
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            // Deliberately oversized, outside the Style.font.* scale
+            // (weather's hero does the same).
+            font.pixelSize: 34
+            font.bold: true
+            fontSizeMode: Text.HorizontalFit
+            minimumPixelSize: 18
+            elide: Text.ElideRight
           }
 
           // ---- 7-day sparkline for the featured coin.
@@ -496,11 +521,26 @@ Panel {
                   font.pixelSize: Style.font.bodySmall
                 }
 
+                // Measured off-screen so the column can size itself to the
+                // ticker without `width` binding back onto its own
+                // implicitWidth.
+                TextMetrics {
+                  id: symbolMetrics
+                  font: symbolText.font
+                  text: symbolText.text
+                }
+
                 Text {
                   id: symbolText
                   anchors.left: rankText.right
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(58)
+                  // Fixed column so names line up, but a long ticker
+                  // (FIGR_HELOC) widens it up to a cap and elides past that,
+                  // instead of overprinting the name next to it.
+                  width: Math.max(Style.space(58),
+                                  Math.min(symbolMetrics.width + Style.space(8),
+                                           Style.space(112)))
+                  elide: Text.ElideRight
                   text: modelData.symbol
                   color: index === root.selectedIndex ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.1)
                   font.family: root.bar.fontFamily

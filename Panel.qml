@@ -1,14 +1,17 @@
 import QtQuick
+import QtQuick.Controls as QQC
 import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Coins popup: a watchlist tab (prices and 24h movement) and, when a
-// portfolio file exists, a portfolio tab (what your holdings are worth),
-// both from CoinGecko's keyless /coins/markets endpoint.
+// Coins popup: a watchlist tab (prices and 24h movement), a portfolio tab
+// (what your holdings are worth), both from CoinGecko's keyless
+// /coins/markets endpoint, and a settings page (the gear) that edits the
+// entries below and the holdings file in place.
 // Settings (shell.json entry for ber.omacoins):
+//   display:        "icon" (default) or "full" — the bar pill's shape
 //   coins:          comma-separated CoinGecko ids ("bitcoin,solana");
 //                   empty means top N by market cap
 //   count:          how many coins to show (default 5)
@@ -50,6 +53,7 @@ Panel {
 
   function close() {
     setCenterHoverRevealSuppressed(false)
+    if (settingsOpen) closeSettings()
     root.controller.hide()
   }
 
@@ -87,6 +91,123 @@ Panel {
   readonly property string portfolioPathShort: portfolioPath.indexOf(home + "/") === 0 ? "~" + portfolioPath.substring(home.length) : portfolioPath
   readonly property string initialTab: String(setting("tab", "watchlist") || "").toLowerCase() === "portfolio" ? "portfolio" : "watchlist"
   readonly property string initialRange: Model.normalizedRange(setting("range", "7d"))
+  // Read here as well as in BarWidget so the settings page can show it.
+  readonly property string displayMode: String(setting("display", "icon") || "icon").toLowerCase()
+
+  // The panel never grows past this; the body scrolls instead.
+  readonly property int maxPanelHeight: Style.space(600)
+
+  // ---- Settings page. Writes go through the shell's own inline-entry
+  //      updater (what `omarchy bar set` ends up calling), applied locally
+  //      first so the control moves on the click and the shell.json write
+  //      comes back as the same value. With no writable entry (the widget
+  //      is not in the layout) the change lasts the session.
+  property bool settingsOpen: false
+  onSettingsOpenChanged: coinsScroll.contentY = 0
+
+  function openSettings() { settingsOpen = true }
+
+  function closeSettings() {
+    settingsOpen = false
+    settingsPage.reset()
+    releaseFocus()
+  }
+
+  function toggleSettings() {
+    if (settingsOpen) closeSettings()
+    else openSettings()
+  }
+
+  // Hands the keyboard back to the panel after a field is done with it.
+  function releaseFocus() { keyCatcher.forceActiveFocus() }
+
+  function persistSettings(values) {
+    var entry = { id: root.moduleName }
+    for (var existing in root.settings) if (existing !== "id") entry[existing] = root.settings[existing]
+    for (var key in values) entry[key] = values[key]
+
+    root.settings = entry
+    if (root.hostWidget && "settings" in root.hostWidget) root.hostWidget.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  function setDisplay(mode) { persistSettings({ display: mode === "full" ? "full" : "icon" }) }
+  function setCurrency(code) { persistSettings({ currency: Model.normalizedCurrency(code) }) }
+  function setCoinCount(n) { persistSettings({ count: Math.max(1, Math.min(25, parseInt(n, 10) || 5)) }) }
+  function setRefreshMinutes(n) { persistSettings({ refreshMinutes: Math.max(1, parseInt(n, 10) || 3) }) }
+
+  // Coins picked out of search this session, so a freshly added id shows
+  // its name before the next price response names it.
+  property var knownCoins: ({})
+
+  function rememberCoin(coin) {
+    if (!coin || !coin.id) return
+    var next = {}
+    for (var k in knownCoins) next[k] = knownCoins[k]
+    next[coin.id] = { symbol: coin.symbol, name: coin.name }
+    knownCoins = next
+  }
+
+  // What the watchlist section edits: the custom list, or — while there is
+  // none — the top-N ids on screen, so the first add or remove turns the
+  // list the user is looking at into a custom one instead of starting over.
+  readonly property var watchlistIds: {
+    if (customCoins !== "") return Model.coinIdList(customCoins)
+    var ids = []
+    for (var i = 0; i < rows.length; i++) ids.push(rows[i].id)
+    return ids
+  }
+  readonly property var watchlistEditRows: Model.coinEditRows(watchlistIds, [rows, portfolioFeed.rows], knownCoins)
+  readonly property var holdingEditRows: Model.holdingEditRows(holdings, [portfolioFeed.rows, rows], knownCoins)
+  // Until a feed has answered, an unpriced id is just unpriced — not wrong.
+  readonly property bool marketsAnswered: markets.updatedAt !== null
+  readonly property bool portfolioAnswered: portfolioFeed.updatedAt !== null
+
+  function setWatchlist(ids) { persistSettings({ coins: Model.joinCoinIds(ids) }) }
+  function addWatchCoin(coin) {
+    rememberCoin(coin)
+    setWatchlist(Model.withCoin(watchlistIds, coin.id))
+  }
+  function removeWatchCoin(id) { setWatchlist(Model.withoutCoin(watchlistIds, id)) }
+  function resetWatchlist() { setWatchlist([]) }
+
+  // ---- Holdings writes. The file is rewritten whole, in the documented
+  //      id → amount form; the new text is applied locally at once, so the
+  //      total updates before the write lands. Writes queue behind an
+  //      in-flight one rather than racing it.
+  property string holdingsPending: ""
+
+  function setHolding(id, amount, coin) {
+    if (coin) rememberCoin(coin)
+    writeHoldings(Model.holdingsWith(holdings, id, amount))
+  }
+
+  function removeHolding(id) { writeHoldings(Model.holdingsWithout(holdings, id)) }
+
+  function writeHoldings(list) {
+    var text = Model.serializeHoldings(list)
+    holdingsText = text
+    portfolioFileFound = true
+    holdingsPending = text
+    flushHoldings()
+  }
+
+  function flushHoldings() {
+    if (holdingsWriter.running || holdingsPending === "") return
+    var text = holdingsPending
+    holdingsPending = ""
+    holdingsWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$0")" && printf "%s" "$1" > "$0"', root.portfolioPath, text]
+    holdingsWriter.running = true
+  }
+
+  Process {
+    id: holdingsWriter
+    onExited: {
+      holdingsFile.reload()
+      Qt.callLater(root.flushHoldings)
+    }
+  }
 
   // ---- Feeds. One request each per refresh, regardless of coin count.
   MarketsFeed { id: markets }
@@ -115,19 +236,17 @@ Panel {
   readonly property var holdings: Model.parseHoldings(holdingsText)
   readonly property string holdingIds: Model.holdingIds(holdings)
   readonly property var portfolio: Model.buildPortfolio(holdings, portfolioFeed.rows)
-  // The tab appears once the file exists, even if it holds nothing yet, so
-  // a half-written file gets a message instead of silence.
   readonly property bool portfolioAvailable: portfolioFileFound
 
-  // ---- Tabs
+  // ---- Tabs. Both are always there: the portfolio tab is where holdings
+  //      get added from, so it cannot wait for the file to exist.
   property string activeTab: initialTab
   onInitialTabChanged: activeTab = initialTab
-  readonly property bool portfolioView: portfolioAvailable && activeTab === "portfolio"
+  readonly property bool portfolioView: activeTab === "portfolio"
   readonly property var activeFeed: portfolioView ? portfolioFeed : markets
 
   function showTab(name) {
-    if (name === "portfolio" && !portfolioAvailable) return
-    activeTab = name
+    activeTab = name === "portfolio" ? "portfolio" : "watchlist"
   }
 
   // True between a currency change and the first response priced in it. The
@@ -233,9 +352,9 @@ Panel {
   readonly property string statusText: {
     if (portfolioView) {
       if (holdings.length === 0)
-        return holdingsText.trim() !== ""
+        return holdingsText.trim() !== "" && holdingsText.trim() !== "{}"
           ? "No holdings read from " + portfolioPathShort + " — expected {\"bitcoin\": 0.5, …}"
-          : "Empty portfolio — add {\"bitcoin\": 0.5, …} to " + portfolioPathShort
+          : "No holdings yet — add coins and amounts under settings (󰒓)"
       if (portfolio.priced === 0 && portfolioFeed.updatedAt)
         return "None of these ids are on CoinGecko — check " + portfolioPathShort
     }
@@ -387,6 +506,7 @@ Panel {
     // Open straight to a tab: `omarchy-shell ber.omacoins portfolio`.
     function watchlist(): void { root.showTab("watchlist"); root.openFromHotkey() }
     function portfolio(): void { root.showTab("portfolio"); root.openFromHotkey() }
+    function settings(): void { root.openFromHotkey(); root.openSettings() }
   }
 
   KeyboardPanel {
@@ -398,85 +518,144 @@ Panel {
     centerOnBar: true
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
-    contentHeight: panel.fittedContentHeight(coinsColumn.implicitHeight)
+    // Header stays put; the body under it scrolls once the panel hits its
+    // height cap.
+    contentHeight: panel.fittedContentHeight(header.height + Style.space(12) + coinsScroll.bodyHeight, root.maxPanelHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onCloseRequested: root.close()
+      // A settings field or dropdown owns the keys while it has them.
+      blocked: root.settingsOpen && settingsPage.editing
+      onCloseRequested: root.settingsOpen ? root.closeSettings() : root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       // Left/Right (h/l) switch tabs; Up/Down (j/k) feature a watchlist coin;
-      // 1/2/3 pick the chart range.
-      onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
+      // 1/2/3 pick the chart range. None of it applies on the settings page.
+      onMoveRequested: function(dx, dy) { if (!root.settingsOpen) root.moveCursor(dx, dy) }
       onTextKey: function(t) {
+        if (root.settingsOpen) return
         var i = ["1", "2", "3"].indexOf(t)
         if (i >= 0) root.showRange(Model.RANGE_KEYS[i])
       }
 
+      // ---- Header: tabs (or the settings title) on the left, the gear or
+      //      its close on the right.
+      Item {
+        id: header
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: Math.max(tabRow.height, headerAction.height)
+
+        Row {
+          id: tabRow
+          visible: !root.settingsOpen
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(12)
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(4)
+
+          Repeater {
+            model: [
+              { key: "watchlist", label: "WATCHLIST" },
+              { key: "portfolio", label: "PORTFOLIO" }
+            ]
+
+            Rectangle {
+              required property var modelData
+              readonly property bool active: root.activeTab === modelData.key
+              width: tabText.implicitWidth + Style.space(20)
+              height: tabText.implicitHeight + Style.space(10)
+              radius: height / 2
+              color: active ? Style.selectedFillFor(root.bar.foreground, Color.accent)
+                            : (tabArea.containsMouse ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent")
+
+              Text {
+                id: tabText
+                anchors.centerIn: parent
+                text: parent.modelData.label
+                color: parent.active ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.5)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.letterSpacing: 1
+                font.bold: parent.active
+              }
+
+              MouseArea {
+                id: tabArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.showTab(parent.modelData.key)
+              }
+            }
+          }
+        }
+
+        Text {
+          visible: root.settingsOpen
+          anchors.left: parent.left
+          anchors.leftMargin: Style.space(22)
+          anchors.verticalCenter: parent.verticalCenter
+          text: "SETTINGS"
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.bodySmall
+          font.letterSpacing: 1
+          font.bold: true
+        }
+
+        PanelActionButton {
+          id: headerAction
+          anchors.right: parent.right
+          anchors.rightMargin: Style.space(10)
+          anchors.verticalCenter: parent.verticalCenter
+          iconText: root.settingsOpen ? "󰅖" : "󰒓"
+          tooltipText: root.settingsOpen ? "Close settings" : "Settings"
+          foreground: root.bar.foreground
+          fontFamily: root.bar.fontFamily
+          onClicked: root.toggleSettings()
+        }
+      }
+
       Flickable {
         id: coinsScroll
-        anchors.fill: parent
+        anchors.top: header.bottom
+        anchors.topMargin: Style.space(12)
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        readonly property real bodyHeight: root.settingsOpen ? settingsPage.implicitHeight : coinsColumn.implicitHeight
         contentWidth: width
-        contentHeight: coinsColumn.implicitHeight
+        contentHeight: bodyHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
 
+        // Thin foreground-tinted bar at the right edge, only while there is
+        // something to scroll to.
+        QQC.ScrollBar.vertical: QQC.ScrollBar {
+          id: scrollBar
+          policy: coinsScroll.contentHeight > coinsScroll.height ? QQC.ScrollBar.AlwaysOn : QQC.ScrollBar.AlwaysOff
+          contentItem: Rectangle {
+            implicitWidth: Style.space(4)
+            radius: Style.cornerRadius > 0 ? width / 2 : 0
+            color: Util.alpha(root.bar.foreground, scrollBar.pressed ? 0.45 : (scrollBar.hovered ? 0.35 : 0.22))
+          }
+        }
+
+        SettingsPage {
+          id: settingsPage
+          visible: root.settingsOpen
+          width: coinsScroll.width
+          panel: root
+        }
+
         Column {
           id: coinsColumn
+          visible: !root.settingsOpen
           width: coinsScroll.width
           spacing: Style.space(12)
-
-          // ---- Tabs: only once there is a portfolio to switch to, so the
-          //      watchlist-only panel stays exactly as it was.
-          Item {
-            visible: root.portfolioAvailable
-            width: parent.width
-            height: tabRow.height
-
-            Row {
-              id: tabRow
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(12)
-              spacing: Style.space(4)
-
-              Repeater {
-                model: [
-                  { key: "watchlist", label: "WATCHLIST" },
-                  { key: "portfolio", label: "PORTFOLIO" }
-                ]
-
-                Rectangle {
-                  required property var modelData
-                  readonly property bool active: root.activeTab === modelData.key
-                  width: tabText.implicitWidth + Style.space(20)
-                  height: tabText.implicitHeight + Style.space(10)
-                  radius: height / 2
-                  color: active ? Style.selectedFillFor(root.bar.foreground, Color.accent)
-                                : (tabArea.containsMouse ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent")
-
-                  Text {
-                    id: tabText
-                    anchors.centerIn: parent
-                    text: parent.modelData.label
-                    color: parent.active ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.5)
-                    font.family: root.bar.fontFamily
-                    font.pixelSize: Style.font.bodySmall
-                    font.letterSpacing: 1
-                    font.bold: parent.active
-                  }
-
-                  MouseArea {
-                    id: tabArea
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: root.showTab(parent.modelData.key)
-                  }
-                }
-              }
-            }
-          }
 
           Text {
             visible: !root.hero

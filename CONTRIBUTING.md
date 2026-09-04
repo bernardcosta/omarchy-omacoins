@@ -33,7 +33,7 @@ Changes to `shell.json` settings hot-reload correctly, no restart needed.
 
 ```bash
 omarchy bar set ber.omacoins <key> <value>   # change a setting ("" restores the default)
-omarchy-shell ber.omacoins toggle            # drive the panel over IPC (also open/close/refresh/watchlist/portfolio)
+omarchy-shell ber.omacoins toggle            # drive the panel over IPC (also open/close/refresh/watchlist/portfolio/settings)
 omarchy plugin validate .                    # check manifest.json against the plugin schema
 ```
 
@@ -48,7 +48,7 @@ run looks misleadingly silent.
 
 ## Architecture — please keep the layering
 
-Five files, and the boundaries between them are load-bearing:
+Seven files, and the boundaries between them are load-bearing:
 
 - **`BarWidget.qml`** — the manifest entry point mounted in the bar.
   Deliberately thin: it draws the bar pill and loads `Panel.qml` through a
@@ -64,7 +64,16 @@ Five files, and the boundaries between them are load-bearing:
   block and the row list are drawn once and serve both tabs from the view
   models `Model.js` builds (`coinHero`/`portfolioHero`,
   `watchlistRows`/`portfolioRows`), so add fields there rather than branching
-  on the tab inside the QML.
+  on the tab inside the QML. Settings writes go through the shell's own
+  `updateEntryInline` (what `omarchy bar set` ends up calling), applied
+  locally first; holdings writes rewrite `portfolio.json` whole, queued behind
+  any write in flight.
+- **`SettingsPage.qml`** — the settings page, a pure view. It reads panel
+  state and calls back into the panel's `set…`/`add…`/`remove…` functions;
+  it never persists anything itself. It exposes `editing` so the panel's key
+  catcher steps aside while a field or dropdown owns the keyboard.
+- **`SearchFeed.qml`** — debounced, single-flight coin lookup against
+  CoinGecko's keyless `/search`, for the autocomplete on the settings page.
 - **`MarketsFeed.qml`** — the state machine for one CoinGecko request (curl
   `Process`, retries, queueing, currency capture). The panel runs two: the
   watchlist and the portfolio.
@@ -100,8 +109,11 @@ Keep it that way. The month and year chart ranges go to DefiLlama, only when
 selected, then cached; please keep them lazy and sequential, and keep every
 endpoint keyless — the plugin's promise is no account and no API key.
 
-To see the portfolio tab locally, create `~/.config/omacoins/portfolio.json`
-(`{"bitcoin": 0.25}` is enough); the tab exists only while the file does.
+The portfolio tab is always there; to see it populated, add a holding on the
+settings page or create `~/.config/omacoins/portfolio.json` (`{"bitcoin":
+0.25}` is enough). The search box on the settings page is one more keyless
+CoinGecko call per query, debounced and never more than one in flight — keep
+it that way for the same reason.
 
 ## Theming
 

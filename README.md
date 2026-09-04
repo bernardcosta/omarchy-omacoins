@@ -23,6 +23,9 @@
   what your holdings are worth, how the total moved over 24h and over the
   chart range, and every position with its value and daily change.
 - **Week, month or year** — one click switches the chart, on either tab.
+- **Settings in the panel** — the gear opens a page with a currency picker,
+  a bar-display switch, the watchlist with CoinGecko autocomplete, and your
+  holdings with editable amounts. No command line needed.
 - **In the bar** — a single ₿ glyph, or the lead coin's price and movement
   inline. Left click opens the panel, middle click refreshes.
 - **Your theme's colors** — up and down shades come from the active Omarchy
@@ -54,6 +57,31 @@ slate:
 ```bash
 rm -r ~/.config/omacoins          # your portfolio file
 ```
+
+## Settings page
+
+Everything below can be set from inside the panel: the gear at the top right
+opens a settings page, `✕` (or `Esc`) brings the coins back. Changes apply on
+the spot and are written to the same places the commands below write to, so
+the two ways of configuring never disagree.
+
+<p align="center">
+  <img src="assets/panel-settings.png" alt="The settings page: a switch for showing the price in the bar, a currency dropdown, a refresh interval, the watchlist with a trash icon per coin and a search box to add one, and the portfolio holdings with an editable amount per coin" width="400">
+</p>
+
+- **General** — show the price in the bar or just the glyph, the currency,
+  how many top coins to list, and the refresh interval.
+- **Watchlist** — type a name or ticker and CoinGecko suggests matches with
+  their ids; pick one to add it. The trash can removes a coin. Adding or
+  removing from the top-N list turns it into your own list; a button puts it
+  back.
+- **Portfolio** — every holding with its amount in a field you can edit, a
+  trash can to drop it, and the same search box to add a coin, then its
+  amount. This edits `portfolio.json` in place, so the file and the page
+  always match.
+
+The panel stops growing at a fixed height and scrolls from there, however
+long the lists get.
 
 ## Watchlist
 
@@ -97,8 +125,10 @@ Keep what you own in one small file and the panel grows a **Portfolio** tab.
 
 ### Set it up
 
-The file is `~/.config/omacoins/portfolio.json`. Create it with CoinGecko ids
-and the amount you hold of each:
+Open the settings page (the gear), search for a coin under **Portfolio**, and
+type how much of it you hold — that creates the file for you. Or write it by
+hand: it is `~/.config/omacoins/portfolio.json`, CoinGecko ids and the amount
+you hold of each:
 
 ```bash
 mkdir -p ~/.config/omacoins
@@ -114,9 +144,9 @@ $EDITOR ~/.config/omacoins/portfolio.json
 }
 ```
 
-That is the whole setup. The tab appears as soon as the file exists, and the
-panel re-reads it on every save, so you can adjust a position and watch the
-total move.
+That is the whole setup. The panel re-reads the file on every save, so you can
+adjust a position — in the file or on the settings page — and watch the total
+move.
 
 <p align="center">
   <img src="assets/panel-portfolio.png" alt="Panel on the portfolio tab: the total value of four holdings with its 24h and 7D change, a chart of the total over the week, and a row per coin showing amount, price, value and 24h change" width="400">
@@ -225,7 +255,7 @@ While the panel is open:
 | `↑` `↓` or `j` `k` | Feature the previous / next watchlist coin |
 | `1` `2` `3` | Chart range: 7D, 1M, 1Y |
 | `Tab` | Jump to the neighbouring bar panel |
-| `Esc` | Close |
+| `Esc` | Close (on the settings page: back to the coins) |
 
 Plugins never install keybindings — those belong to you, in
 `~/.config/hypr/bindings.lua`. To open the panel from the keyboard:
@@ -240,7 +270,7 @@ o.bind("SUPER + CTRL + P", "Portfolio", "omarchy-shell ber.omacoins portfolio")
 ```
 
 The plugin's IPC target accepts `open`, `close`, `toggle`, `refresh`,
-`watchlist` and `portfolio`. Pick any free combo; check yours with
+`watchlist`, `portfolio` and `settings`. Pick any free combo; check yours with
 `omarchy menu keybindings --print`.
 
 ## Settings
@@ -257,8 +287,9 @@ The plugin's IPC target accepts `open`, `close`, `toggle`, `refresh`,
 | `tab` | `watchlist` | Tab shown at startup: `watchlist` or `portfolio`. |
 | `range` | `7d` | Chart range at startup: `7d`, `30d` or `1y`. |
 
-Settings hot-reload on save. `omarchy bar set` is the easiest way to change
-one, or edit the entry in `~/.config/omarchy/shell.json` directly:
+Settings hot-reload on save. The settings page in the panel covers the first
+six; `omarchy bar set` changes any of them, or edit the entry in
+`~/.config/omarchy/shell.json` directly:
 
 ```jsonc
 {

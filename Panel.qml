@@ -294,12 +294,15 @@ Panel {
   }
 
   // Opening the panel shouldn't burn a rate-limited API call when the data
-  // is under a minute old; the refresh timer and middle-click still force it.
-  // The holdings file is local, so re-reading it is always free.
+  // is under a minute old, or when an attempt is already under way or was
+  // made within the minute — repeated opens during a rate-limit window
+  // must not pile requests into it. The refresh timer and middle-click
+  // still force a fetch. The holdings file is local, so re-reading it is
+  // always free.
   function refreshIfStale() {
     holdingsFile.reload()
-    if (markets.isStale(60 * 1000)) refreshMarkets()
-    if (root.holdingIds !== "" && portfolioFeed.isStale(60 * 1000)) refreshPortfolio()
+    if (markets.wantsRefresh(60 * 1000)) refreshMarkets()
+    if (root.holdingIds !== "" && portfolioFeed.wantsRefresh(60 * 1000)) refreshPortfolio()
   }
 
   function moveCursor(dx, dy) {

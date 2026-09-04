@@ -86,7 +86,8 @@ Five files, and the boundaries between them are load-bearing:
 CoinGecko's keyless endpoint is rate limited per IP, and most of
 `MarketsFeed.qml` exists to respect that: last-good rows survive a failure,
 retries are spaced 20s apart with a budget of 3 per `fetch()`,
-`refreshIfStale()` skips a fetch on data under a minute old, a `fetch()`
+`refreshIfStale()` skips a fetch on data under a minute old or when an
+attempt is already under way or under a minute old (`wantsRefresh`), a `fetch()`
 landing mid-flight is queued (and dropped when identical to the one in
 progress), and `refreshMinutes` clamps to a 1-minute floor. Please do not
 loosen any of these — a plugin that hammers the endpoint gets everyone's IP

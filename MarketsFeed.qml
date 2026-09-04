@@ -22,6 +22,11 @@ QtObject {
 
   property var rows: []
   property var updatedAt: null
+  // When the last request went out, success or not. Opening the panel
+  // asks for a refresh only when the data is stale; during a rate-limit
+  // window there is no fresh success, so this is what stops each open
+  // from firing another attempt into the same closed window.
+  property var attemptedAt: null
   property bool failed: false
   property int retries: 0
   property bool queued: false
@@ -44,6 +49,14 @@ QtObject {
     return !updatedAt || (Date.now() - updatedAt.getTime()) >= maxAgeMs
   }
 
+  // Stale, and nothing already on its way to fixing that: no request in
+  // flight, no retry scheduled, no attempt within the window.
+  function wantsRefresh(maxAgeMs) {
+    if (!isStale(maxAgeMs)) return false
+    if (proc.running || retryTimer.running) return false
+    return !attemptedAt || (Date.now() - attemptedAt.getTime()) >= maxAgeMs
+  }
+
   // Drop everything, including a pending retry. Used when the feed has
   // nothing left to fetch (an emptied portfolio).
   function clear() {
@@ -51,6 +64,7 @@ QtObject {
     queued = false
     rows = []
     updatedAt = null
+    attemptedAt = null
     failed = false
     retries = 0
     rowsSymbol = ""
@@ -68,6 +82,7 @@ QtObject {
     // the request is in the air, and these results belong to the old ones.
     pendingUrl = url
     pendingSymbol = symbol
+    attemptedAt = new Date()
     proc.command = Model.curlCommand(url, 10)
     proc.running = true
   }

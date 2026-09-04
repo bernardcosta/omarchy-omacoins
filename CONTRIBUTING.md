@@ -33,7 +33,7 @@ Changes to `shell.json` settings hot-reload correctly, no restart needed.
 
 ```bash
 omarchy bar set ber.omacoins <key> <value>   # change a setting ("" restores the default)
-omarchy-shell shell toggle ber.omacoins      # drive the panel over IPC (also open/close/refresh)
+omarchy-shell ber.omacoins toggle            # drive the panel over IPC (also open/close/refresh/watchlist/portfolio)
 omarchy plugin validate .                    # check manifest.json against the plugin schema
 ```
 
@@ -48,7 +48,7 @@ run looks misleadingly silent.
 
 ## Architecture — please keep the layering
 
-Three files, and the boundaries between them are load-bearing:
+Five files, and the boundaries between them are load-bearing:
 
 - **`BarWidget.qml`** — the manifest entry point mounted in the bar.
   Deliberately thin: it draws the bar pill and loads `Panel.qml` through a
@@ -59,8 +59,18 @@ Three files, and the boundaries between them are load-bearing:
   its slot, `opened`, `open()`, `close()`, `popoutSwitchClosing` and
   `closeForPopoutSwitch()` must stay forwarded from the panel to this root —
   `Bar.findPanelWidget` and `Bar.requestPopout` require them there.
-- **`Panel.qml`** — all state and behaviour: settings parsing, the fetch state
-  machine, theme colours, and the popup UI.
+- **`Panel.qml`** — all state and behaviour: settings parsing, the two feeds,
+  the holdings file watch, tab state, theme colours, and the popup UI. The hero
+  block and the row list are drawn once and serve both tabs from the view
+  models `Model.js` builds (`coinHero`/`portfolioHero`,
+  `watchlistRows`/`portfolioRows`), so add fields there rather than branching
+  on the tab inside the QML.
+- **`MarketsFeed.qml`** — the state machine for one CoinGecko request (curl
+  `Process`, retries, queueing, currency capture). The panel runs two: the
+  watchlist and the portfolio.
+- **`HistoryFeed.qml`** — cached, on-demand price history for the month and
+  year chart ranges: DefiLlama first (several coins per request), CoinGecko's
+  per-coin endpoint as the fallback, one request at a time.
 - **`Model.js`** — pure functions only. No QML imports, no side effects. It has
   a `module.exports` guard so it can be exercised directly:
 
@@ -73,16 +83,24 @@ Three files, and the boundaries between them are load-bearing:
 
 ## Touching the fetch path
 
-CoinGecko's keyless endpoint is rate limited per IP, and most of the state
-machine exists to respect that: last-good rows survive a failure, retries are
-spaced 20s apart with a budget of 3 per cycle, `refreshIfStale()` skips a fetch
-on data under a minute old, `fetchQueued` handles a settings change landing
-mid-flight, and `refreshMinutes` clamps to a 1-minute floor. Please do not
+CoinGecko's keyless endpoint is rate limited per IP, and most of
+`MarketsFeed.qml` exists to respect that: last-good rows survive a failure,
+retries are spaced 20s apart with a budget of 3 per `fetch()`,
+`refreshIfStale()` skips a fetch on data under a minute old, a `fetch()`
+landing mid-flight is queued (and dropped when identical to the one in
+progress), and `refreshMinutes` clamps to a 1-minute floor. Please do not
 loosen any of these — a plugin that hammers the endpoint gets everyone's IP
 throttled.
 
-One request covers price, 24h change and sparkline for every coin listed, so
-coin count never costs extra requests. Keep it that way.
+One request per feed covers price, 24h change and sparkline for every coin
+listed, so coin count never costs extra requests; a portfolio costs exactly one
+more per refresh, and only a change in *which* ids are held triggers it early.
+Keep it that way. The month and year chart ranges go to DefiLlama, only when
+selected, then cached; please keep them lazy and sequential, and keep every
+endpoint keyless — the plugin's promise is no account and no API key.
+
+To see the portfolio tab locally, create `~/.config/omacoins/portfolio.json`
+(`{"bitcoin": 0.25}` is enough); the tab exists only while the file does.
 
 ## Theming
 

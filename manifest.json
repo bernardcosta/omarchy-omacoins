@@ -4,7 +4,7 @@
   "name": "Omacoins",
   "version": "0.2.0",
   "author": "ber",
-  "description": "Crypto watchlist: coin prices and 24h movement in the bar",
+  "description": "Crypto watchlist and portfolio: coin prices, 24h movement and what your holdings are worth, in the bar",
   "kinds": [
     "bar-widget"
   ],
@@ -13,7 +13,7 @@
   },
   "barWidget": {
     "displayName": "Omacoins",
-    "description": "Coin prices with 24h movement",
+    "description": "Coin prices, 24h movement and your portfolio",
     "category": "Info",
     "allowMultiple": false,
     "defaultSection": "center"

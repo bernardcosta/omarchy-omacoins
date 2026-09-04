@@ -72,8 +72,24 @@ Panel {
   // was changed mid-request); the finishing fetch immediately starts another.
   property bool fetchQueued: false
 
-  // Bar pill text, updated with each successful response.
-  property string label: ""
+  // Currency symbol the loaded rows were priced in, and the one the in-flight
+  // request was built with. Everything on screen renders from the former, not
+  // from the live setting: a currency change must not relabel yesterday's USD
+  // numbers as euros, and the pill and the panel must flip together.
+  property string rowsCurrencySymbol: ""
+  property string pendingCurrencySymbol: ""
+  readonly property string displaySymbol: rowsCurrencySymbol !== "" ? rowsCurrencySymbol : currencySymbol
+
+  // Bar pill text. A binding rather than an assignment on each response, so
+  // the pill tracks the rows the same way the panel rows do — assigning it
+  // only on fetch success left it stuck on the old currency until new prices
+  // arrived, which the rate limit can delay by a retry cycle.
+  readonly property string label: Model.barLabel(rows, displaySymbol)
+
+  // True between a currency change and the first response priced in it. The
+  // keyless endpoint's rate limit can stretch that to a retry cycle, so the
+  // footer says so instead of looking frozen.
+  readonly property bool currencyPending: rowsCurrencySymbol !== "" && rowsCurrencySymbol !== currencySymbol
 
   readonly property string customCoins: String(setting("coins", "")).trim()
   readonly property string currency: Model.normalizedCurrency(setting("currency", "usd"))
@@ -136,6 +152,9 @@ Panel {
       fetchQueued = true
       return
     }
+    // Captured now, not read on completion: the setting can change while the
+    // request is in the air, and these results belong to the old currency.
+    pendingCurrencySymbol = root.currencySymbol
     marketsProc.command = ["curl", "-fsS", "--max-time", "10",
       Model.marketsUrl(root.customCoins, root.coinCount, root.currency)]
     marketsProc.running = true
@@ -194,8 +213,8 @@ Panel {
           root.scheduleFetchRetry()
           return
         }
+        root.rowsCurrencySymbol = root.pendingCurrencySymbol
         root.rows = parsed
-        root.label = Model.barLabel(parsed, root.currencySymbol)
         root.updatedAt = new Date()
         root.fetchRetries = 0
         root.fetchFailed = false
@@ -365,7 +384,7 @@ Panel {
                   font.letterSpacing: 1
                 }
                 Text {
-                  text: root.hero && root.hero.high24h !== null ? Model.compactPrice(root.hero.high24h, root.currencySymbol) : "—"
+                  text: root.hero && root.hero.high24h !== null ? Model.compactPrice(root.hero.high24h, root.displaySymbol) : "—"
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -382,7 +401,7 @@ Panel {
                   font.letterSpacing: 1
                 }
                 Text {
-                  text: root.hero && root.hero.low24h !== null ? Model.compactPrice(root.hero.low24h, root.currencySymbol) : "—"
+                  text: root.hero && root.hero.low24h !== null ? Model.compactPrice(root.hero.low24h, root.displaySymbol) : "—"
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -399,7 +418,7 @@ Panel {
                   font.letterSpacing: 1
                 }
                 Text {
-                  text: root.hero ? (Model.compactCap(root.hero.marketCap, root.currencySymbol) || "—") : "—"
+                  text: root.hero ? (Model.compactCap(root.hero.marketCap, root.displaySymbol) || "—") : "—"
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -416,7 +435,7 @@ Panel {
             visible: !!root.hero
             x: Style.space(16)
             width: parent.width - Style.space(32)
-            text: root.hero ? Model.formatPrice(root.hero.price, root.currencySymbol) : ""
+            text: root.hero ? Model.formatPrice(root.hero.price, root.displaySymbol) : ""
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             // Deliberately oversized, outside the Style.font.* scale
@@ -605,7 +624,7 @@ Panel {
                   anchors.right: changeBadge.left
                   anchors.rightMargin: Style.space(14)
                   anchors.verticalCenter: parent.verticalCenter
-                  text: Model.formatPrice(modelData.price, root.currencySymbol)
+                  text: Model.formatPrice(modelData.price, root.displaySymbol)
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -661,7 +680,9 @@ Panel {
               id: footerText
               anchors.left: parent.left
               anchors.leftMargin: Style.space(16)
-              text: "CoinGecko" + (root.updatedAt ? " · updated " + Qt.formatTime(root.updatedAt, "HH:mm") : "")
+              text: "CoinGecko" + (root.currencyPending
+                                    ? " · switching to " + root.currency.toUpperCase() + "…"
+                                    : (root.updatedAt ? " · updated " + Qt.formatTime(root.updatedAt, "HH:mm") : ""))
               color: Qt.darker(root.bar.foreground, 1.6)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption

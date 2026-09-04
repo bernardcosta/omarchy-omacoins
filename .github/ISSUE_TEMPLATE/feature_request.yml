@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest something Omacoins should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation you are in, not the solution you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like it to do?
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Constraints this needs to respect
+      description: Omacoins makes one keyless CoinGecko request per refresh, on purpose.
+      options:
+        - label: This does not require an API key or an account
+        - label: This does not add extra requests per refresh
+        - label: I am not sure — happy to discuss

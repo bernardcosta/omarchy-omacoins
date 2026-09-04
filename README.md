@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/bernardcosta/omarchy-omacoins/tags"><img alt="Latest tag" src="https://img.shields.io/github/v/tag/bernardcosta/omarchy-omacoins?label=version"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
 </p>
 
 <p align="center">
@@ -29,6 +30,22 @@ omarchy plugin add https://github.com/bernardcosta/omarchy-omacoins --enable
 
 `--enable` places the widget on the bar. Nothing else to build, and no key to
 obtain: CoinGecko's `/coins/markets` endpoint is public.
+
+### Update, disable, remove
+
+```bash
+omarchy plugin update ber.omacoins    # pull the latest release
+omarchy plugin disable ber.omacoins   # take it off the bar, keep it installed
+omarchy plugin enable ber.omacoins    # put it back
+omarchy plugin remove ber.omacoins    # uninstall it entirely
+```
+
+`remove` asks for confirmation, unloads the widget, then deletes the plugin
+directory — pass `--yes` to skip the prompt, and `omarchy plugin rm` is an alias.
+
+Your settings survive it. The `ber.omacoins` entry stays in the `bar` section of
+`~/.config/omarchy/shell.json`, so reinstalling picks up the coins, count and
+display mode you had. Delete that entry by hand if you want a clean slate.
 
 ## Track your own coins
 
@@ -200,8 +217,27 @@ Pick any free combo; check yours with `omarchy menu keybindings --print`.
   `portfolio.json` (holdings never leave your machine)
 - Optional CoinMarketCap API key as an alternative data source
 
-## Credits
+## Contributing
 
-Prices, market caps and sparklines come from
-[CoinGecko](https://www.coingecko.com), whose public API needs no account and no
-key. The panel is a display for it.
+Bug reports and small focused PRs are welcome — see
+[CONTRIBUTING.md](CONTRIBUTING.md) for a development copy, the architecture, and
+the one restart gotcha that will otherwise waste your afternoon. Security issues
+should go through [SECURITY.md](SECURITY.md) rather than a public issue.
+
+## License and dependencies
+
+Omacoins is released under the [MIT License](LICENSE).
+
+It bundles no third-party code and vendors nothing. At runtime it depends only
+on what Omarchy already provides — Quickshell/QML and `curl` — plus one external
+service:
+
+| Dependency | Role | Terms |
+|---|---|---|
+| [CoinGecko API](https://www.coingecko.com/en/api) | Prices, 24h change, market caps, sparklines, via the keyless public `/coins/markets` endpoint | [CoinGecko Terms of Service](https://www.coingecko.com/en/terms) |
+
+No account, no API key, no telemetry. Market data belongs to CoinGecko; this
+panel is a display for it.
+
+Prices are shown for information only and are not financial advice. The keyless
+endpoint is rate limited and can lag or fail — do not trade on this widget.

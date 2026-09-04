@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in the panel or the bar pill is wrong
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Most panel problems come from either a rate-limited
+        CoinGecko response or a stale QML compilation — the fields below tell those apart.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. omarchy bar set ber.omacoins coins ...
+        2. Open the panel
+        3. ...
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Omacoins version
+      description: The `version` field in `~/.config/omarchy/plugins/ber.omacoins/manifest.json`
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: omarchy-version
+    attributes:
+      label: Omarchy version
+      description: Output of `omarchy version`
+      placeholder: "4.0.1-1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Your widget settings
+      description: The `ber.omacoins` entry from `~/.config/omarchy/shell.json`
+      render: json
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Shell log
+      description: "Anything relevant from: `journalctl --user -b | grep -i omacoins`"
+      render: shell
+
+  - type: input
+    id: theme
+    attributes:
+      label: Active theme
+      description: Only needed for colour or contrast problems
+      placeholder: tokyo-night
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I ran `omarchy-restart-shell` and the problem persists
+          required: true
+        - label: I am on the latest release (`omarchy plugin update ber.omacoins`)
+          required: true

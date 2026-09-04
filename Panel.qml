@@ -5,12 +5,18 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Watchlist popup: coin prices and 24h movement from CoinGecko's keyless
-// /coins/markets endpoint. Settings (shell.json entry for ber.omacoins):
+// Coins popup: a watchlist tab (prices and 24h movement) and, when a
+// portfolio file exists, a portfolio tab (what your holdings are worth),
+// both from CoinGecko's keyless /coins/markets endpoint.
+// Settings (shell.json entry for ber.omacoins):
 //   coins:          comma-separated CoinGecko ids ("bitcoin,solana");
 //                   empty means top N by market cap
 //   count:          how many coins to show (default 5)
+//   currency:       CoinGecko vs_currency (default usd)
 //   refreshMinutes: auto-refresh interval (default 3)
+//   portfolio:      holdings file (default ~/.config/omacoins/portfolio.json)
+//   tab:            tab shown at startup, "watchlist" (default) or "portfolio"
+//   range:          chart range at startup: "7d" (default), "30d" or "1y"
 Panel {
   id: root
   moduleName: "ber.omacoins"
@@ -63,39 +69,178 @@ Panel {
       root.bar.centerHoverRevealSuppressed = value
   }
 
-  // Parsed market rows. Kept on failure so stale data stays visible.
-  property var rows: []
-  property var updatedAt: null
-  property int fetchRetries: 0
-  property bool fetchFailed: false
-  // Set when a refresh arrives while a fetch is in flight (e.g. the currency
-  // was changed mid-request); the finishing fetch immediately starts another.
-  property bool fetchQueued: false
-
-  // Currency symbol the loaded rows were priced in, and the one the in-flight
-  // request was built with. Everything on screen renders from the former, not
-  // from the live setting: a currency change must not relabel yesterday's USD
-  // numbers as euros, and the pill and the panel must flip together.
-  property string rowsCurrencySymbol: ""
-  property string pendingCurrencySymbol: ""
-  readonly property string displaySymbol: rowsCurrencySymbol !== "" ? rowsCurrencySymbol : currencySymbol
-
-  // Bar pill text. A binding rather than an assignment on each response, so
-  // the pill tracks the rows the same way the panel rows do — assigning it
-  // only on fetch success left it stuck on the old currency until new prices
-  // arrived, which the rate limit can delay by a retry cycle.
-  readonly property string label: Model.barLabel(rows, displaySymbol)
-
-  // True between a currency change and the first response priced in it. The
-  // keyless endpoint's rate limit can stretch that to a retry cycle, so the
-  // footer says so instead of looking frozen.
-  readonly property bool currencyPending: rowsCurrencySymbol !== "" && rowsCurrencySymbol !== currencySymbol
-
+  // ---- Settings
   readonly property string customCoins: String(setting("coins", "")).trim()
   readonly property string currency: Model.normalizedCurrency(setting("currency", "usd"))
   readonly property string currencySymbol: Model.currencySymbol(currency)
   readonly property int coinCount: Math.max(1, Math.min(25, parseInt(setting("count", 5), 10) || 5))
   readonly property int refreshMinutes: Math.max(1, parseInt(setting("refreshMinutes", 3), 10) || 3)
+  readonly property string home: Quickshell.env("HOME")
+  readonly property string defaultPortfolioPath: home + "/.config/omacoins/portfolio.json"
+  readonly property string portfolioPath: {
+    var p = String(setting("portfolio", "") || "").trim()
+    if (p === "") return defaultPortfolioPath
+    if (p === "~") return home
+    if (p.indexOf("~/") === 0) return home + p.substring(1)
+    return p
+  }
+  readonly property string portfolioPathShort: portfolioPath.indexOf(home + "/") === 0 ? "~" + portfolioPath.substring(home.length) : portfolioPath
+  readonly property string initialTab: String(setting("tab", "watchlist") || "").toLowerCase() === "portfolio" ? "portfolio" : "watchlist"
+  readonly property string initialRange: Model.normalizedRange(setting("range", "7d"))
+
+  // ---- Feeds. One request each per refresh, regardless of coin count.
+  MarketsFeed { id: markets }
+  MarketsFeed { id: portfolioFeed }
+  // History for the 1M/1Y ranges (DefiLlama, CoinGecko as fallback), on
+  // demand and cached.
+  HistoryFeed { id: history }
+
+  readonly property var rows: markets.rows
+
+  // Currency symbol each feed's rows were priced in. Everything on screen
+  // renders from these, not from the live setting: a currency change must
+  // not relabel yesterday's USD numbers as euros, and the pill and the
+  // panel must flip together.
+  readonly property string displaySymbol: markets.rowsSymbol !== "" ? markets.rowsSymbol : currencySymbol
+  readonly property string portfolioSymbol: portfolioFeed.rowsSymbol !== "" ? portfolioFeed.rowsSymbol : currencySymbol
+
+  // Bar pill text. A binding rather than an assignment on each response, so
+  // the pill tracks the rows the same way the panel rows do.
+  readonly property string label: Model.barLabel(rows, displaySymbol)
+
+  // ---- Holdings. The file is the whole portfolio: {"bitcoin": 0.5, ...}.
+  //      It never leaves the machine; only the ids go to CoinGecko.
+  property bool portfolioFileFound: false
+  property string holdingsText: ""
+  readonly property var holdings: Model.parseHoldings(holdingsText)
+  readonly property string holdingIds: Model.holdingIds(holdings)
+  readonly property var portfolio: Model.buildPortfolio(holdings, portfolioFeed.rows)
+  // The tab appears once the file exists, even if it holds nothing yet, so
+  // a half-written file gets a message instead of silence.
+  readonly property bool portfolioAvailable: portfolioFileFound
+
+  // ---- Tabs
+  property string activeTab: initialTab
+  onInitialTabChanged: activeTab = initialTab
+  readonly property bool portfolioView: portfolioAvailable && activeTab === "portfolio"
+  readonly property var activeFeed: portfolioView ? portfolioFeed : markets
+
+  function showTab(name) {
+    if (name === "portfolio" && !portfolioAvailable) return
+    activeTab = name
+  }
+
+  // True between a currency change and the first response priced in it. The
+  // keyless endpoint's rate limit can stretch that to a retry cycle, so the
+  // footer says so instead of looking frozen.
+  readonly property bool currencyPending: activeFeed.rowsSymbol !== "" && activeFeed.rowsSymbol !== currencySymbol
+
+  // Featured coin in the watchlist hero; clicking a row or pressing Up/Down
+  // changes it.
+  property int selectedIndex: 0
+  readonly property var selectedCoin: rows.length > 0 ? rows[Math.min(selectedIndex, rows.length - 1)] : null
+
+  // The hero block and the row list draw whichever tab is active from the
+  // same fields; Model.js shapes a coin or the portfolio into them.
+  readonly property var hero: portfolioView ? Model.portfolioHero(portfolio, portfolioSymbol, chartSeries, rangeLabel) : Model.coinHero(selectedCoin, displaySymbol, chartSeries)
+  readonly property var listRows: portfolioView ? Model.portfolioRows(portfolio, portfolioSymbol) : Model.watchlistRows(rows, displaySymbol)
+  readonly property string listTitle: {
+    if (portfolioView) return portfolio.items.length + (portfolio.items.length === 1 ? " HOLDING" : " HOLDINGS")
+    return customCoins !== "" ? "WATCHLIST" : ("TOP " + coinCount + " BY MARKET CAP")
+  }
+
+  // ---- Chart range. 7d comes with the market rows; 1M and 1Y are fetched
+  //      when selected — the featured coin on the watchlist, every priced
+  //      holding on the portfolio — and cached as long as the data's own
+  //      resolution makes worthwhile (four-hourly points for the month,
+  //      daily for the year). While the panel is open, the rest of the
+  //      coins on screen are prefetched behind them, so featuring another
+  //      coin or switching tabs doesn't wait on a request. History is USD
+  //      and scaled onto each coin's live price, so it follows the
+  //      currency setting without refetching.
+  property string range: initialRange
+  onInitialRangeChanged: range = initialRange
+  readonly property int rangeDays: Model.RANGES[range].days
+  readonly property string rangeLabel: Model.RANGES[range].label
+  readonly property int historyMaxAge: range === "1y" ? 12 * 60 * 60 * 1000 : 60 * 60 * 1000
+
+  readonly property var chartIds: {
+    if (portfolioView) {
+      var ids = []
+      for (var i = 0; i < portfolio.items.length; i++) if (portfolio.items[i].coin) ids.push(portfolio.items[i].id)
+      return ids
+    }
+    return selectedCoin ? [selectedCoin.id] : []
+  }
+  readonly property string chartKey: range + "|" + chartIds.join(",")
+  onChartKeyChanged: Qt.callLater(ensureHistory)
+
+  // Everything else on screen that the chart could switch to next.
+  readonly property var prefetchIds: {
+    var ids = []
+    var seen = {}
+    for (var i = 0; i < chartIds.length; i++) seen[chartIds[i]] = true
+    for (var r = 0; r < rows.length; r++) {
+      if (!seen[rows[r].id]) { seen[rows[r].id] = true; ids.push(rows[r].id) }
+    }
+    for (var h = 0; h < portfolio.items.length; h++) {
+      var it = portfolio.items[h]
+      if (it.coin && !seen[it.id]) { seen[it.id] = true; ids.push(it.id) }
+    }
+    return ids
+  }
+  readonly property string prefetchKey: chartKey + "|" + prefetchIds.join(",") + "|" + opened
+  onPrefetchKeyChanged: Qt.callLater(ensureHistory)
+
+  function ensureHistory() {
+    if (range === "7d") return
+    history.keepOnly(rangeDays)
+    if (chartIds.length > 0) history.want(chartIds, rangeDays, historyMaxAge, true)
+    // Prefetch only while open: with the panel closed for hours, keeping
+    // every coin's history warm would be requests for nobody.
+    if (opened && prefetchIds.length > 0) history.want(prefetchIds, rangeDays, historyMaxAge, false)
+  }
+
+  function showRange(name) {
+    range = Model.normalizedRange(name)
+  }
+
+  readonly property var chartSeries: {
+    if (range === "7d") return portfolioView ? portfolio.sparkline : (selectedCoin ? selectedCoin.sparkline : [])
+    var cache = history.cache
+    if (!portfolioView) return selectedCoin ? Model.scaleSeries(history.series(selectedCoin.id, rangeDays), selectedCoin.price) : []
+    var parts = []
+    for (var i = 0; i < portfolio.items.length; i++) {
+      var it = portfolio.items[i]
+      if (!it.coin) continue
+      var s = history.series(it.id, rangeDays)
+      // Partial sums would misstate the total; wait for every coin.
+      if (s.length < 2) return []
+      parts.push({ series: Model.scaleSeries(s, it.coin.price), amount: it.amount })
+    }
+    return Model.sumSeries(parts)
+  }
+  readonly property bool chartFailed: {
+    if (range === "7d" || chartSeries.length > 1) return false
+    var failedAt = history.failedAt
+    for (var i = 0; i < chartIds.length; i++) if (history.failed(chartIds[i], rangeDays)) return true
+    return false
+  }
+  readonly property bool chartLoading: range !== "7d" && chartSeries.length < 2 && !chartFailed
+  readonly property var chartChange: Model.rangeChange(chartSeries, portfolioView ? portfolio.total : (selectedCoin ? selectedCoin.price : null))
+
+  // What to say when there is no hero to show.
+  readonly property string statusText: {
+    if (portfolioView) {
+      if (holdings.length === 0)
+        return holdingsText.trim() !== ""
+          ? "No holdings read from " + portfolioPathShort + " — expected {\"bitcoin\": 0.5, …}"
+          : "Empty portfolio — add {\"bitcoin\": 0.5, …} to " + portfolioPathShort
+      if (portfolio.priced === 0 && portfolioFeed.updatedAt)
+        return "None of these ids are on CoinGecko — check " + portfolioPathShort
+    }
+    return activeFeed.failed ? "CoinGecko unreachable (rate limit?) — retrying at next refresh" : "Fetching prices…"
+  }
 
   // Movement colors come from the active theme's palette: every Omarchy theme
   // defines its own red and green in colors.toml, so up/down shades follow the
@@ -120,53 +265,51 @@ Panel {
     downColor = down
   }
 
-  readonly property string watchlistTitle: customCoins !== "" ? "WATCHLIST" : ("TOP " + coinCount + " BY MARKET CAP")
-
-  // Featured coin shown in the hero; clicking a watchlist row changes it.
-  property int selectedIndex: 0
-  readonly property var hero: rows.length > 0 ? rows[Math.min(selectedIndex, rows.length - 1)] : null
-
-  // A settings edit (different coins or count) should refetch immediately,
-  // not wait out the refresh timer.
-  onCustomCoinsChanged: Qt.callLater(refresh)
-  onCoinCountChanged: Qt.callLater(refresh)
+  // A settings edit should refetch immediately, not wait out the refresh
+  // timer — but only the feed it affects.
+  onCustomCoinsChanged: Qt.callLater(refreshMarkets)
+  onCoinCountChanged: Qt.callLater(refreshMarkets)
   onCurrencyChanged: Qt.callLater(refresh)
+  // Amount edits recompute locally; only a change in *which* coins needs
+  // CoinGecko again.
+  onHoldingIdsChanged: Qt.callLater(refreshPortfolio)
 
   function refresh() {
-    // Each refresh cycle gets a fresh retry budget, so an earlier exhausted
-    // round (e.g. waking with the network still down) doesn't starve retries
-    // for the rest of the session.
-    fetchRetries = 0
-    startFetch()
+    holdingsFile.reload()
+    refreshMarkets()
+    refreshPortfolio()
+    ensureHistory()
+  }
+
+  function refreshMarkets() {
+    markets.fetch(Model.marketsUrl(root.customCoins, root.coinCount, root.currency), root.currencySymbol)
+  }
+
+  function refreshPortfolio() {
+    if (root.holdingIds === "") {
+      portfolioFeed.clear()
+      return
+    }
+    portfolioFeed.fetch(Model.marketsUrl(root.holdingIds, root.holdings.length, root.currency), root.currencySymbol)
   }
 
   // Opening the panel shouldn't burn a rate-limited API call when the data
   // is under a minute old; the refresh timer and middle-click still force it.
+  // The holdings file is local, so re-reading it is always free.
   function refreshIfStale() {
-    if (updatedAt && (Date.now() - updatedAt.getTime()) < 60 * 1000) return
-    refresh()
+    holdingsFile.reload()
+    if (markets.isStale(60 * 1000)) refreshMarkets()
+    if (root.holdingIds !== "" && portfolioFeed.isStale(60 * 1000)) refreshPortfolio()
   }
 
-  function startFetch() {
-    if (marketsProc.running) {
-      fetchQueued = true
+  function moveCursor(dx, dy) {
+    if (dx !== 0) {
+      showTab(dx > 0 ? "portfolio" : "watchlist")
       return
     }
-    // Captured now, not read on completion: the setting can change while the
-    // request is in the air, and these results belong to the old currency.
-    pendingCurrencySymbol = root.currencySymbol
-    marketsProc.command = ["curl", "-fsS", "--max-time", "10",
-      Model.marketsUrl(root.customCoins, root.coinCount, root.currency)]
-    marketsProc.running = true
-  }
-
-  function scheduleFetchRetry() {
-    if (fetchRetries >= 3) {
-      fetchFailed = true
-      return
-    }
-    fetchRetries++
-    fetchRetryTimer.restart()
+    if (dy === 0 || portfolioView || rows.length === 0) return
+    var current = Math.min(selectedIndex, rows.length - 1)
+    selectedIndex = Math.max(0, Math.min(rows.length - 1, current + dy))
   }
 
   function changeColor(change) {
@@ -179,13 +322,32 @@ Panel {
     return Qt.rgba(c.r, c.g, c.b, 0.16)
   }
 
+  // Watched for live edits; also re-read on every refresh and panel open,
+  // which covers the file appearing after startup and editors that save by
+  // replacing the file (which an inode watch loses track of).
+  FileView {
+    id: holdingsFile
+    path: root.portfolioPath
+    watchChanges: true
+    printErrors: false
+    onLoaded: {
+      root.portfolioFileFound = true
+      root.holdingsText = text()
+    }
+    onLoadFailed: {
+      root.portfolioFileFound = false
+      root.holdingsText = ""
+    }
+    onFileChanged: reload()
+  }
+
   // colors.toml sits behind the current-theme symlink, which a plain file
   // watch misses when the symlink retargets. Theme switches do push the new
   // palette into the shell's Color singleton over IPC, so its property
   // changes are the reliable "theme swapped" signal to re-read the file.
   FileView {
     id: themeColorsFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme/colors.toml"
+    path: root.home + "/.local/state/omarchy/current/theme/colors.toml"
     printErrors: false
     onLoaded: root.loadThemeColors(text())
     onLoadFailed: root.loadThemeColors("")
@@ -199,40 +361,8 @@ Panel {
     function onUrgentChanged() { themeColorsFile.reload() }
   }
 
-  Process {
-    id: marketsProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var wasQueued = root.fetchQueued
-        root.fetchQueued = false
-
-        var parsed = Model.parseMarkets(text)
-        if (parsed.length === 0) {
-          // Keep last-good rows visible, but try again shortly.
-          root.scheduleFetchRetry()
-          return
-        }
-        root.rowsCurrencySymbol = root.pendingCurrencySymbol
-        root.rows = parsed
-        root.updatedAt = new Date()
-        root.fetchRetries = 0
-        root.fetchFailed = false
-        // A queued refresh means these results were requested with settings
-        // that have since changed — refetch with the current ones.
-        if (wasQueued) Qt.callLater(root.startFetch)
-      }
-    }
-  }
-
-  // Generous spacing between retries: the usual failure is CoinGecko's
-  // per-IP rate limit, which hammering only prolongs.
-  Timer {
-    id: fetchRetryTimer
-    interval: 20000
-    onTriggered: root.startFetch()
-  }
-
+  // Runs with the panel closed too: in `full` display mode the bar pill
+  // carries a live price.
   Timer {
     id: refreshTimer
     interval: root.refreshMinutes * 60 * 1000
@@ -251,6 +381,9 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): void { root.refresh() }
+    // Open straight to a tab: `omarchy-shell ber.omacoins portfolio`.
+    function watchlist(): void { root.showTab("watchlist"); root.openFromHotkey() }
+    function portfolio(): void { root.showTab("portfolio"); root.openFromHotkey() }
   }
 
   KeyboardPanel {
@@ -269,6 +402,13 @@ Panel {
       anchors.fill: parent
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
+      // Left/Right (h/l) switch tabs; Up/Down (j/k) feature a watchlist coin;
+      // 1/2/3 pick the chart range.
+      onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
+      onTextKey: function(t) {
+        var i = ["1", "2", "3"].indexOf(t)
+        if (i >= 0) root.showRange(Model.RANGE_KEYS[i])
+      }
 
       Flickable {
         id: coinsScroll
@@ -284,28 +424,81 @@ Panel {
           width: coinsScroll.width
           spacing: Style.space(12)
 
+          // ---- Tabs: only once there is a portfolio to switch to, so the
+          //      watchlist-only panel stays exactly as it was.
+          Item {
+            visible: root.portfolioAvailable
+            width: parent.width
+            height: tabRow.height
+
+            Row {
+              id: tabRow
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(12)
+              spacing: Style.space(4)
+
+              Repeater {
+                model: [
+                  { key: "watchlist", label: "WATCHLIST" },
+                  { key: "portfolio", label: "PORTFOLIO" }
+                ]
+
+                Rectangle {
+                  required property var modelData
+                  readonly property bool active: root.activeTab === modelData.key
+                  width: tabText.implicitWidth + Style.space(20)
+                  height: tabText.implicitHeight + Style.space(10)
+                  radius: height / 2
+                  color: active ? Style.selectedFillFor(root.bar.foreground, Color.accent)
+                                : (tabArea.containsMouse ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent")
+
+                  Text {
+                    id: tabText
+                    anchors.centerIn: parent
+                    text: parent.modelData.label
+                    color: parent.active ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.5)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.bodySmall
+                    font.letterSpacing: 1
+                    font.bold: parent.active
+                  }
+
+                  MouseArea {
+                    id: tabArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.showTab(parent.modelData.key)
+                  }
+                }
+              }
+            }
+          }
+
           Text {
             visible: !root.hero
-            anchors.left: parent.left
-            anchors.leftMargin: Style.space(16)
-            text: root.fetchFailed ? "CoinGecko unreachable (rate limit?) — retrying at next refresh" : "Fetching prices…"
+            x: Style.space(16)
+            width: parent.width - Style.space(32)
+            wrapMode: Text.WordWrap
+            text: root.statusText
             color: Qt.darker(root.bar.foreground, 1.5)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.body
             font.italic: true
           }
 
-          // ---- Hero: featured coin — identity + change badge on the left,
-          //      HIGH/LOW/MCAP stat columns on the right, and the big price
-          //      on its own full-width row beneath (weather-hero style).
+          // ---- Hero: the featured coin, or the portfolio total — identity
+          //      + change badge on the left, three stat columns on the
+          //      right, and the big number on its own full-width row
+          //      beneath (weather-hero style).
           Item {
             id: heroRow
             visible: !!root.hero
             width: parent.width
             height: Math.max(heroIdentity.height, heroStats.height)
 
-            // Room the featured coin's identity line has before it would run
-            // under the HIGH/LOW/MCAP columns.
+            // Room the identity line has before it would run under the
+            // stat columns.
             readonly property real leftRoom: Math.max(0, heroStats.x - heroIdentity.x - Style.space(12))
 
             TextMetrics {
@@ -323,7 +516,7 @@ Panel {
 
               Text {
                 id: heroSymbol
-                text: root.hero ? root.hero.symbol : ""
+                text: root.hero ? root.hero.title : ""
                 color: root.bar.foreground
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -332,6 +525,9 @@ Panel {
               }
               Text {
                 id: heroName
+                // The portfolio hero has no subtitle; hiding it keeps the
+                // Row from spacing around an empty item.
+                visible: text !== ""
                 anchors.verticalCenter: heroSymbol.verticalCenter
                 // advanceWidth, not width: the bounding rect comes up a
                 // few px short on letter-spaced text and elides needlessly.
@@ -339,7 +535,7 @@ Panel {
                                 Math.max(0, heroRow.leftRoom - heroSymbol.width
                                             - heroBadge.width - Style.space(16)))
                 elide: Text.ElideRight
-                text: root.hero ? root.hero.name.toUpperCase() : ""
+                text: root.hero ? root.hero.subtitle : ""
                 color: Qt.darker(root.bar.foreground, 1.4)
                 font.family: root.bar.fontFamily
                 font.pixelSize: Style.font.subtitle
@@ -348,18 +544,18 @@ Panel {
 
               Rectangle {
                 id: heroBadge
-                visible: root.hero && root.hero.change24h !== null
+                visible: root.hero && root.hero.change !== null
                 anchors.verticalCenter: heroSymbol.verticalCenter
                 width: heroBadgeText.implicitWidth + Style.space(14)
                 height: heroBadgeText.implicitHeight + Style.space(6)
                 radius: height / 2
-                color: root.hero ? root.badgeFill(root.hero.change24h) : "transparent"
+                color: root.hero ? root.badgeFill(root.hero.change) : "transparent"
 
                 Text {
                   id: heroBadgeText
                   anchors.centerIn: parent
-                  text: root.hero ? Model.formatChange(root.hero.change24h) : ""
-                  color: root.hero ? root.changeColor(root.hero.change24h) : "transparent"
+                  text: root.hero ? Model.formatChange(root.hero.change) : ""
+                  color: root.hero ? root.changeColor(root.hero.change) : "transparent"
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.bodySmall
                   font.bold: true
@@ -374,68 +570,39 @@ Panel {
               anchors.verticalCenter: parent.verticalCenter
               spacing: Style.space(20)
 
-              Column {
-                spacing: Style.space(5)
-                Text {
-                  text: "HIGH"
-                  color: Qt.darker(root.bar.foreground, 1.5)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-                Text {
-                  text: root.hero && root.hero.high24h !== null ? Model.compactPrice(root.hero.high24h, root.displaySymbol) : "—"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                }
-              }
+              Repeater {
+                model: root.hero ? root.hero.stats : []
 
-              Column {
-                spacing: Style.space(5)
-                Text {
-                  text: "LOW"
-                  color: Qt.darker(root.bar.foreground, 1.5)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-                Text {
-                  text: root.hero && root.hero.low24h !== null ? Model.compactPrice(root.hero.low24h, root.displaySymbol) : "—"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                }
-              }
-
-              Column {
-                spacing: Style.space(5)
-                Text {
-                  text: "MCAP"
-                  color: Qt.darker(root.bar.foreground, 1.5)
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.caption
-                  font.letterSpacing: 1
-                }
-                Text {
-                  text: root.hero ? (Model.compactCap(root.hero.marketCap, root.displaySymbol) || "—") : "—"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.subtitle
+                Column {
+                  required property var modelData
+                  spacing: Style.space(5)
+                  Text {
+                    text: parent.modelData.label
+                    color: Qt.darker(root.bar.foreground, 1.5)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.letterSpacing: 1
+                  }
+                  Text {
+                    text: parent.modelData.value
+                    color: root.bar.foreground
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.subtitle
+                  }
                 }
               }
             }
           }
 
-          // ---- Big price on its own row: full width at its designed size.
-          //      HorizontalFit stays as the fallback, so it only shrinks if
-          //      the price outgrows the panel itself.
+          // ---- Big number on its own row: full width at its designed
+          //      size. HorizontalFit stays as the fallback, so it only
+          //      shrinks if the value outgrows the panel itself.
           Text {
             id: heroPrice
             visible: !!root.hero
             x: Style.space(16)
             width: parent.width - Style.space(32)
-            text: root.hero ? Model.formatPrice(root.hero.price, root.displaySymbol) : ""
+            text: root.hero ? root.hero.price : ""
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             // Deliberately oversized, outside the Style.font.* scale
@@ -447,10 +614,12 @@ Panel {
             elide: Text.ElideRight
           }
 
-          // ---- 7-day sparkline for the featured coin.
+          // ---- Chart: the coin's price, or the portfolio total, over the
+          //      selected range. Kept at full height while a range loads
+          //      so the panel doesn't jump.
           Canvas {
             id: spark
-            visible: series.length > 1
+            visible: !!root.hero
             width: parent.width - Style.space(32)
             height: Style.space(44)
             anchors.horizontalCenter: parent.horizontalCenter
@@ -460,6 +629,16 @@ Panel {
 
             onSeriesChanged: requestPaint()
             onLineColorChanged: requestPaint()
+
+            Text {
+              anchors.centerIn: parent
+              visible: root.chartLoading || root.chartFailed
+              text: root.chartFailed ? "History unavailable (rate limit?)" : "Loading " + root.rangeDays + " days…"
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.italic: true
+            }
 
             onPaint: {
               var ctx = getContext("2d")
@@ -498,26 +677,69 @@ Panel {
             }
           }
 
+          // ---- Range picker under the chart, with the move over that
+          //      range on the right. Shared by both tabs.
           Item {
             visible: !!root.hero
             width: parent.width
-            height: sparkCaption.implicitHeight
+            height: rangeRow.height
+
+            Row {
+              id: rangeRow
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(12)
+              spacing: Style.space(2)
+
+              Repeater {
+                model: Model.RANGE_KEYS
+
+                Rectangle {
+                  required property string modelData
+                  readonly property bool active: root.range === modelData
+                  width: rangeText.implicitWidth + Style.space(14)
+                  height: rangeText.implicitHeight + Style.space(8)
+                  radius: height / 2
+                  color: active ? Style.selectedFillFor(root.bar.foreground, Color.accent)
+                                : (rangeArea.containsMouse ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent")
+
+                  Text {
+                    id: rangeText
+                    anchors.centerIn: parent
+                    text: Model.RANGES[parent.modelData].label
+                    color: parent.active ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.6)
+                    font.family: root.bar.fontFamily
+                    font.pixelSize: Style.font.caption
+                    font.letterSpacing: 1
+                    font.bold: parent.active
+                  }
+
+                  MouseArea {
+                    id: rangeArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.showRange(parent.modelData)
+                  }
+                }
+              }
+            }
 
             Text {
-              id: sparkCaption
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(16)
-              text: "7 DAYS"
-              color: Qt.darker(root.bar.foreground, 1.6)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(16)
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.chartChange !== null
+              text: Model.formatChange(root.chartChange)
+              color: root.changeColor(root.chartChange)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
-              font.letterSpacing: 1
+              font.bold: true
             }
           }
 
-          // ---- Divider between hero and watchlist.
+          // ---- Divider between hero and the list.
           Rectangle {
-            visible: root.rows.length > 0
+            visible: root.listRows.length > 0
             width: parent.width
             height: Style.spacing.hairline
             color: root.bar.foreground
@@ -525,7 +747,7 @@ Panel {
           }
 
           Item {
-            visible: root.rows.length > 0
+            visible: root.listRows.length > 0
             width: parent.width
             height: headerTitle.implicitHeight
 
@@ -533,7 +755,7 @@ Panel {
               id: headerTitle
               anchors.left: parent.left
               anchors.leftMargin: Style.space(16)
-              text: root.watchlistTitle
+              text: root.listTitle
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -551,30 +773,34 @@ Panel {
             }
           }
 
-          // ---- Coin rows: rank + symbol + name left, price + change badge
-          //      right. Hover highlights; clicking features the coin above.
+          // ---- Rows: lead (rank) + symbol + detail left, value + change
+          //      badge right. Watchlist rows hover and click to feature the
+          //      coin above; portfolio rows are read-only.
           Column {
             width: parent.width
             spacing: Style.space(2)
 
             Repeater {
-              model: root.rows
+              model: root.listRows
 
               Rectangle {
                 required property var modelData
                 required property int index
+                readonly property bool selected: modelData.selectable && index === root.selectedIndex
                 width: parent.width
                 height: Style.space(32)
                 radius: Style.cornerRadius
-                color: rowArea.containsMouse ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
+                // The featured coin keeps the hover fill, so j/k and clicks
+                // both leave a visible cursor on the list.
+                color: (selected || (modelData.selectable && rowArea.containsMouse)) ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
 
                 Text {
                   id: rankText
                   anchors.left: parent.left
                   anchors.leftMargin: Style.space(16)
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(22)
-                  text: String(modelData.rank)
+                  width: modelData.lead !== "" ? Style.space(22) : 0
+                  text: modelData.lead
                   color: Qt.darker(root.bar.foreground, 1.5)
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.bodySmall
@@ -601,7 +827,7 @@ Panel {
                                            Style.space(112)))
                   elide: Text.ElideRight
                   text: modelData.symbol
-                  color: index === root.selectedIndex ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.1)
+                  color: selected ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.1)
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.subtitle
                   font.bold: true
@@ -612,7 +838,7 @@ Panel {
                   anchors.right: priceText.left
                   anchors.rightMargin: Style.space(12)
                   anchors.verticalCenter: parent.verticalCenter
-                  text: modelData.name
+                  text: modelData.detail
                   color: Qt.darker(root.bar.foreground, 1.5)
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.body
@@ -624,7 +850,7 @@ Panel {
                   anchors.right: changeBadge.left
                   anchors.rightMargin: Style.space(14)
                   anchors.verticalCenter: parent.verticalCenter
-                  text: Model.formatPrice(modelData.price, root.displaySymbol)
+                  text: modelData.value
                   color: root.bar.foreground
                   font.family: root.bar.fontFamily
                   font.pixelSize: Style.font.subtitle
@@ -638,13 +864,13 @@ Panel {
                   width: Style.space(58)
                   height: changeText.implicitHeight + Style.space(6)
                   radius: height / 2
-                  color: root.badgeFill(modelData.change24h)
+                  color: root.badgeFill(modelData.change)
 
                   Text {
                     id: changeText
                     anchors.centerIn: parent
-                    text: Model.formatChange(modelData.change24h) || "—"
-                    color: root.changeColor(modelData.change24h)
+                    text: Model.formatChange(modelData.change) || "—"
+                    color: root.changeColor(modelData.change)
                     font.family: root.bar.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     font.bold: true
@@ -654,9 +880,9 @@ Panel {
                 MouseArea {
                   id: rowArea
                   anchors.fill: parent
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.selectedIndex = index
+                  hoverEnabled: modelData.selectable
+                  cursorShape: modelData.selectable ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: if (modelData.selectable) root.selectedIndex = index
                 }
               }
             }
@@ -664,7 +890,7 @@ Panel {
 
           // ---- Divider + footer
           Rectangle {
-            visible: root.rows.length > 0
+            visible: root.listRows.length > 0
             width: parent.width
             height: Style.spacing.hairline
             color: root.bar.foreground
@@ -672,7 +898,7 @@ Panel {
           }
 
           Item {
-            visible: root.rows.length > 0
+            visible: root.listRows.length > 0
             width: parent.width
             height: footerText.implicitHeight
 
@@ -680,9 +906,10 @@ Panel {
               id: footerText
               anchors.left: parent.left
               anchors.leftMargin: Style.space(16)
-              text: "CoinGecko" + (root.currencyPending
+              text: (root.range !== "7d" ? "CoinGecko · DefiLlama" : "CoinGecko")
+                    + (root.currencyPending
                                     ? " · switching to " + root.currency.toUpperCase() + "…"
-                                    : (root.updatedAt ? " · updated " + Qt.formatTime(root.updatedAt, "HH:mm") : ""))
+                                    : (root.activeFeed.updatedAt ? " · updated " + Qt.formatTime(root.activeFeed.updatedAt, "HH:mm") : ""))
               color: Qt.darker(root.bar.foreground, 1.6)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption

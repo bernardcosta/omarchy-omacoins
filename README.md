@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/overview.gif" alt="Clicking the Bitcoin glyph in the Omarchy bar opens the Omacoins panel on the top 10 coins by market cap; a row is clicked to feature Bitcoin, the Portfolio tab is opened, and the 1Y button redraws the total's chart over a year" width="460">
+  <img src="assets/overview.webp" alt="Clicking the Bitcoin glyph in the Omarchy bar opens the Omacoins panel on the top 10 coins by market cap; Tether is clicked to feature it, the gear opens the settings page, the bar switch turns the glyph into a live BTC price pill and back, and the page scrolls down through the startup options, the watchlist and the holdings" width="460">
 </p>
 
 ## At a glance

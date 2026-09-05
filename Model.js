@@ -52,17 +52,28 @@ function currencySymbol(code) {
   return CURRENCY_SYMBOLS[c] !== undefined ? CURRENCY_SYMBOLS[c] : c.toUpperCase() + " "
 }
 
+// `count` only sizes the page for a top-N request. With ids named, the page
+// is as long as the list (CoinGecko caps a page at 250): a per_page smaller
+// than the list silently drops coins from the answer, and which ones is up
+// to CoinGecko.
 function marketsUrl(customCoins, count, currency) {
+  var ids = coinIdList(customCoins)
+  var perPage = ids.length > 0 ? Math.min(250, ids.length) : Math.max(1, parseInt(count, 10) || 1)
   var url = "https://api.coingecko.com/api/v3/coins/markets"
     + "?vs_currency=" + encodeURIComponent(normalizedCurrency(currency))
     + "&order=market_cap_desc"
     + "&page=1"
     + "&price_change_percentage=24h"
     + "&sparkline=true"
-    + "&per_page=" + count
-  var coins = String(customCoins || "").trim().replace(/\s+/g, "")
-  if (coins !== "") url += "&ids=" + encodeURIComponent(coins)
+    + "&per_page=" + perPage
+  if (ids.length > 0) url += "&ids=" + encodeURIComponent(ids.join(","))
   return url
+}
+
+// The ids a /coins/markets URL asks for, normalised; "" for a top-N request.
+function urlIds(url) {
+  var m = String(url || "").match(/[?&]ids=([^&]*)/)
+  return m ? joinCoinIds(decodeURIComponent(m[1]).split(",")) : ""
 }
 
 // portfolio.json → [{id, amount}], in file order. Accepts an id→amount map
@@ -391,6 +402,206 @@ function formatSigned(value, sym) {
   return sign + sym + abs.toFixed(2)
 }
 
+// ---- Settings page helpers. The panel edits the watchlist and the
+// holdings file in place, so the list surgery lives here where it is
+// testable, and the QML only ever hands over ids and amounts.
+
+// CoinGecko /search: keyless, same per-IP budget as /coins/markets.
+function searchUrl(query) {
+  return "https://api.coingecko.com/api/v3/search?query=" + encodeURIComponent(String(query || "").trim())
+}
+
+// /search response → [{id, symbol, name, rank}], best matches first, capped
+// so the suggestion list stays a list. null (not []) when the body is not a
+// search result at all — a 429 comes back as {"status": {...}} — so the
+// caller can say "rate limited" instead of "no matches".
+function parseSearch(raw, limit) {
+  if (limit === undefined) limit = 6
+  try {
+    var data = JSON.parse(String(raw || ""))
+    if (!data || !Array.isArray(data.coins)) return null
+    var out = []
+    for (var i = 0; i < data.coins.length && out.length < limit; i++) {
+      var c = data.coins[i]
+      if (!c || !c.id) continue
+      out.push({
+        id: String(c.id),
+        symbol: String(c.symbol || "").toUpperCase(),
+        name: String(c.name || ""),
+        rank: (c.market_cap_rank === null || c.market_cap_rank === undefined) ? null : Number(c.market_cap_rank)
+      })
+    }
+    return out
+  } catch (e) {
+    return null
+  }
+}
+
+// "bitcoin, Solana,,bitcoin" → ["bitcoin", "solana"]
+function coinIdList(customCoins) {
+  var parts = String(customCoins || "").split(",")
+  var out = []
+  for (var i = 0; i < parts.length; i++) {
+    var id = parts[i].trim().toLowerCase()
+    if (id !== "" && out.indexOf(id) === -1) out.push(id)
+  }
+  return out
+}
+
+function joinCoinIds(ids) {
+  return coinIdList((ids || []).join(",")).join(",")
+}
+
+function withCoin(ids, id) {
+  return coinIdList((ids || []).concat([String(id || "")]).join(","))
+}
+
+function withoutCoin(ids, id) {
+  var drop = String(id || "").trim().toLowerCase()
+  var out = []
+  var list = coinIdList((ids || []).join(","))
+  for (var i = 0; i < list.length; i++) if (list[i] !== drop) out.push(list[i])
+  return out
+}
+
+// Ids → rows for the settings lists, named from whatever market rows are on
+// hand (the watchlist feed, the portfolio feed) or from `known`, the coins
+// the user picked out of search this session — so a coin just added reads
+// as "SOL Solana" before CoinGecko has priced it, and a stray id that
+// nothing recognises still shows as itself.
+function coinInfo(id, rowSets, known) {
+  for (var s = 0; s < (rowSets || []).length; s++) {
+    var rows = rowSets[s] || []
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].id === id) return { symbol: rows[i].symbol, name: rows[i].name, priced: true }
+    }
+  }
+  var k = known ? known[id] : undefined
+  if (k) return { symbol: String(k.symbol || id.toUpperCase()), name: String(k.name || ""), priced: false }
+  return { symbol: id.toUpperCase(), name: "", priced: false }
+}
+
+// Amount as typed: "0.5", "0,5", "1,000,000.25", " 12 ". A single comma
+// with no dot is a decimal point ("1,325" is 1.325 — on a comma-decimal
+// keyboard that is the key, and nobody types a thousands separator into
+// an amount field); commas are only thousands separators when there is a
+// dot as well or more than one of them. null when it is not a positive
+// finite number, which is what parseHoldings would drop anyway.
+function parseAmount(text) {
+  var s = String(text || "").trim()
+  if (/^[0-9]*,[0-9]+$/.test(s)) s = s.replace(",", ".")
+  else if (/^[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?$/.test(s)) s = s.replace(/,/g, "")
+  if (s === "" || !/^[0-9]*\.?[0-9]+$|^[0-9]+\.?[0-9]*$/.test(s)) return null
+  var n = Number(s)
+  return (isFinite(n) && n > 0) ? n : null
+}
+
+// Amount for an input field: the plain number, never the display form
+// ("10,000" would not round-trip through parseHoldings' Number()).
+function editableAmount(value) {
+  var n = Number(value)
+  if (!isFinite(n)) return ""
+  var s = String(parseFloat(n.toPrecision(12)))
+  return s.indexOf("e") >= 0 ? n.toFixed(10).replace(/0+$/, "").replace(/\.$/, "") : s
+}
+
+function holdingsWith(holdings, id, amount) {
+  id = String(id || "").trim().toLowerCase()
+  var n = Number(amount)
+  // A bad amount must not turn into a deletion downstream.
+  if (id === "" || !isFinite(n) || n <= 0) return holdingsWithout(holdings, "")
+  var out = []
+  var replaced = false
+  for (var i = 0; i < (holdings || []).length; i++) {
+    if (holdings[i].id === id) {
+      out.push({ id: id, amount: n })
+      replaced = true
+    } else {
+      out.push({ id: holdings[i].id, amount: holdings[i].amount })
+    }
+  }
+  if (!replaced) out.push({ id: id, amount: n })
+  return out
+}
+
+function holdingsWithout(holdings, id) {
+  id = String(id || "").trim().toLowerCase()
+  var out = []
+  for (var i = 0; i < (holdings || []).length; i++) {
+    if (holdings[i].id !== id) out.push({ id: holdings[i].id, amount: holdings[i].amount })
+  }
+  return out
+}
+
+// portfolio.json text in the documented id → amount form, one holding per
+// line. Whatever shape the file had before, this is the shape it gets.
+// Amounts are written so they read back as the same number: the plain
+// form where it round-trips, JSON's shortest form otherwise.
+function serializeHoldings(holdings) {
+  var lines = []
+  for (var i = 0; i < (holdings || []).length; i++) {
+    var h = holdings[i]
+    var n = Number(h.amount)
+    if (!h.id || !isFinite(n) || n <= 0) continue
+    var plain = editableAmount(n)
+    var text = Number(plain) === n ? plain : JSON.stringify(n)
+    if (!(Number(text) > 0)) continue
+    lines.push("  " + JSON.stringify(String(h.id)) + ": " + text)
+  }
+  return lines.length === 0 ? "{}\n" : "{\n" + lines.join(",\n") + "\n}\n"
+}
+
+// Currencies offered by the settings page: CoinGecko's fiat vs_currencies,
+// plus the two crypto units people actually quote in.
+var CURRENCIES = [
+  { value: "usd", label: "USD · US Dollar" },
+  { value: "eur", label: "EUR · Euro" },
+  { value: "gbp", label: "GBP · British Pound" },
+  { value: "jpy", label: "JPY · Japanese Yen" },
+  { value: "chf", label: "CHF · Swiss Franc" },
+  { value: "cad", label: "CAD · Canadian Dollar" },
+  { value: "aud", label: "AUD · Australian Dollar" },
+  { value: "nzd", label: "NZD · New Zealand Dollar" },
+  { value: "cny", label: "CNY · Chinese Yuan" },
+  { value: "hkd", label: "HKD · Hong Kong Dollar" },
+  { value: "sgd", label: "SGD · Singapore Dollar" },
+  { value: "krw", label: "KRW · South Korean Won" },
+  { value: "inr", label: "INR · Indian Rupee" },
+  { value: "brl", label: "BRL · Brazilian Real" },
+  { value: "mxn", label: "MXN · Mexican Peso" },
+  { value: "ars", label: "ARS · Argentine Peso" },
+  { value: "clp", label: "CLP · Chilean Peso" },
+  { value: "sek", label: "SEK · Swedish Krona" },
+  { value: "nok", label: "NOK · Norwegian Krone" },
+  { value: "dkk", label: "DKK · Danish Krone" },
+  { value: "pln", label: "PLN · Polish Złoty" },
+  { value: "czk", label: "CZK · Czech Koruna" },
+  { value: "huf", label: "HUF · Hungarian Forint" },
+  { value: "uah", label: "UAH · Ukrainian Hryvnia" },
+  { value: "rub", label: "RUB · Russian Ruble" },
+  { value: "try", label: "TRY · Turkish Lira" },
+  { value: "ils", label: "ILS · Israeli Shekel" },
+  { value: "aed", label: "AED · UAE Dirham" },
+  { value: "sar", label: "SAR · Saudi Riyal" },
+  { value: "kwd", label: "KWD · Kuwaiti Dinar" },
+  { value: "bhd", label: "BHD · Bahraini Dinar" },
+  { value: "zar", label: "ZAR · South African Rand" },
+  { value: "ngn", label: "NGN · Nigerian Naira" },
+  { value: "gel", label: "GEL · Georgian Lari" },
+  { value: "pkr", label: "PKR · Pakistani Rupee" },
+  { value: "bdt", label: "BDT · Bangladeshi Taka" },
+  { value: "lkr", label: "LKR · Sri Lankan Rupee" },
+  { value: "thb", label: "THB · Thai Baht" },
+  { value: "vnd", label: "VND · Vietnamese Dong" },
+  { value: "php", label: "PHP · Philippine Peso" },
+  { value: "idr", label: "IDR · Indonesian Rupiah" },
+  { value: "myr", label: "MYR · Malaysian Ringgit" },
+  { value: "twd", label: "TWD · New Taiwan Dollar" },
+  { value: "mmk", label: "MMK · Myanmar Kyat" },
+  { value: "btc", label: "BTC · Bitcoin" },
+  { value: "eth", label: "ETH · Ether" }
+]
+
 // ---- View models. The panel draws one hero block and one row list for
 // both tabs, so these shape a coin or a portfolio into the same fields:
 //   hero: { title, subtitle, change, price, sparkline, stats: [{label, value}] }
@@ -483,6 +694,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     parseMarkets: parseMarkets,
     marketsUrl: marketsUrl,
+    urlIds: urlIds,
     normalizedCurrency: normalizedCurrency,
     currencySymbol: currencySymbol,
     thousands: thousands,
@@ -511,6 +723,19 @@ if (typeof module !== "undefined") {
     coinsPerChartCall: coinsPerChartCall,
     llamaChartUrl: llamaChartUrl,
     parseLlamaChart: parseLlamaChart,
-    scaleSeries: scaleSeries
+    scaleSeries: scaleSeries,
+    searchUrl: searchUrl,
+    parseSearch: parseSearch,
+    coinIdList: coinIdList,
+    joinCoinIds: joinCoinIds,
+    withCoin: withCoin,
+    withoutCoin: withoutCoin,
+    coinInfo: coinInfo,
+    parseAmount: parseAmount,
+    editableAmount: editableAmount,
+    holdingsWith: holdingsWith,
+    holdingsWithout: holdingsWithout,
+    serializeHoldings: serializeHoldings,
+    CURRENCIES: CURRENCIES
   }
 }

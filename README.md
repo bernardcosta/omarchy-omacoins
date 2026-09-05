@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/overview.gif" alt="Clicking the Bitcoin glyph in the Omarchy bar opens the Omacoins panel on the top 10 coins by market cap; a row is clicked to feature Bitcoin, the Portfolio tab is opened, and the 1Y button redraws the total's chart over a year" width="460">
+  <img src="assets/overview.webp" alt="Clicking the Bitcoin glyph in the Omarchy bar opens the Omacoins panel on the top 10 coins by market cap; Tether is clicked to feature it, the gear opens the settings page, the bar switch turns the glyph into a live BTC price pill and back, and the page scrolls down through the startup options, the watchlist and the holdings" width="460">
 </p>
 
 ## At a glance
@@ -23,6 +23,9 @@
   what your holdings are worth, how the total moved over 24h and over the
   chart range, and every position with its value and daily change.
 - **Week, month or year** — one click switches the chart, on either tab.
+- **Settings in the panel** — the gear opens a page with a currency picker,
+  a bar-display switch, the watchlist with CoinGecko autocomplete, and your
+  holdings with editable amounts. No command line needed.
 - **In the bar** — a single ₿ glyph, or the lead coin's price and movement
   inline. Left click opens the panel, middle click refreshes.
 - **Your theme's colors** — up and down shades come from the active Omarchy
@@ -55,6 +58,32 @@ slate:
 rm -r ~/.config/omacoins          # your portfolio file
 ```
 
+## Settings page
+
+Every setting can be changed from inside the panel. The gear at the top right
+opens the settings page; `✕` or `Esc` brings the coins back. A change applies
+on the spot and lands in the same place the command-line form writes to, so
+the two never disagree. Each section below shows both ways.
+
+<p align="center">
+  <img src="assets/panel-settings.png" alt="The settings page: a switch for showing the price in the bar, a currency dropdown, top-coin and refresh counters, the tab and chart range to open on, and the bar glyph" width="400">
+  <img src="assets/panel-settings-add.png" alt="Lower down the settings page: the watchlist with a trash can per coin, a search box with CoinGecko suggestions for 'sol' showing each coin's id, and the portfolio holdings with an editable amount per coin" width="400">
+</p>
+
+- **General** — price in the bar or just the glyph, the currency, how many
+  top coins to list, and the refresh interval.
+- **Startup** — the tab and chart range the panel opens on, the bar glyph,
+  and where the portfolio file lives. An empty field means the default.
+- **Watchlist** — your `coins` list, one row per id. Type a name or ticker,
+  CoinGecko suggests matches with their ids, pick one to add it. The trash
+  can removes a coin; an empty list means the top coins by market cap.
+- **Portfolio** — every holding with its amount in a field you can edit, a
+  trash can to drop it, and a search box to add a coin and then its amount.
+  This edits `portfolio.json` in place, so file and page always match.
+
+The coin pages size the panel to what they show; the settings page keeps a
+fixed height and scrolls inside it, however long the lists get.
+
 ## Watchlist
 
 By default the panel lists the top coins by market cap. `count` sets how many,
@@ -68,22 +97,26 @@ omarchy bar set ber.omacoins count 10
   <img src="assets/panel-top-10.png" alt="Panel on the watchlist tab listing the top 10 coins by market cap with Tether featured in the hero" width="400">
 </p>
 
-Or name your own coins by CoinGecko id, and the list becomes your watchlist.
-Every row keeps its market-cap rank, so you can still see where your picks sit
-overall:
+Or name your own coins, and the list becomes your watchlist. On the settings
+page, type a name or ticker under **Watchlist** and pick the match; the trash
+can takes a coin off again. On the command line, use CoinGecko ids:
 
 ```bash
 omarchy bar set ber.omacoins coins bitcoin,solana,hyperliquid,cardano
 omarchy bar set ber.omacoins coins ""      # back to the top coins
 ```
 
+Every row keeps its market-cap rank, so you can still see where your picks sit
+overall:
+
 <p align="center">
   <img src="assets/panel-watchlist.png" alt="Panel in watchlist mode listing Bitcoin, Solana, Hyperliquid and Cardano, each row keeping its market-cap rank of 1, 7, 10 and 19" width="400">
 </p>
 
-Click any row, or press `j`/`k`, to feature that coin in the hero. The id is
-the last part of a coin's CoinGecko URL: `coingecko.com/en/coins/monero` →
-`monero`.
+Click any row, or press `j`/`k`, to feature that coin in the hero. If you
+need an id for the command line, the settings page shows it next to every
+suggestion, and it is also the last part of a coin's CoinGecko URL:
+`coingecko.com/en/coins/monero` → `monero`.
 
 ## Portfolio
 
@@ -97,8 +130,10 @@ Keep what you own in one small file and the panel grows a **Portfolio** tab.
 
 ### Set it up
 
-The file is `~/.config/omacoins/portfolio.json`. Create it with CoinGecko ids
-and the amount you hold of each:
+Open the settings page (the gear), search for a coin under **Portfolio**, and
+type how much of it you hold — that creates the file for you. Or write it by
+hand: it is `~/.config/omacoins/portfolio.json`, CoinGecko ids and the amount
+you hold of each:
 
 ```bash
 mkdir -p ~/.config/omacoins
@@ -114,12 +149,12 @@ $EDITOR ~/.config/omacoins/portfolio.json
 }
 ```
 
-That is the whole setup. The tab appears as soon as the file exists, and the
-panel re-reads it on every save, so you can adjust a position and watch the
-total move.
+That is the whole setup. The panel re-reads the file on every save, so you can
+adjust a position — in the file or on the settings page — and watch the total
+move.
 
 <p align="center">
-  <img src="assets/panel-portfolio.png" alt="Panel on the portfolio tab: the total value of four holdings with its 24h and 7D change, a chart of the total over the week, and a row per coin showing amount, price, value and 24h change" width="400">
+  <img src="assets/panel-portfolio.png" alt="Panel on the portfolio tab: the total value of ten holdings with its 24h and 7D change, a chart of the total over the week, and a row per coin showing amount, price, value and 24h change" width="400">
 </p>
 
 ### What it shows
@@ -129,12 +164,15 @@ total move.
   the total moved, in money.
 - **TOP** — your largest position and its share of the total.
 - **Holdings**, largest first: amount and current price on the left, value and
-  24h change on the right.
+  24h change on the right. Amounts are edited on the settings page, or in the
+  file.
 
 An id CoinGecko doesn't know stays listed as `not a CoinGecko id`, so a typo is
 visible instead of silently missing from the total.
 
 ### Options
+
+Both are under **Startup** on the settings page, or:
 
 ```bash
 omarchy bar set ber.omacoins tab portfolio            # open on the portfolio tab
@@ -158,8 +196,10 @@ figure on the right is the move over that range, and on the portfolio tab the
 middle stat follows it too. Press `1`, `2` or `3` to switch from the keyboard.
 
 <p align="center">
-  <img src="assets/panel-portfolio-1y.png" alt="Portfolio tab with the 1Y range selected: the total's chart over a year drawn in the theme's red, the 1Y stat showing the move in dollars, and -19.3% on the right of the range buttons" width="400">
+  <img src="assets/panel-portfolio-1y.png" alt="Portfolio tab with the 1Y range selected: the total's chart over a year drawn in the theme's red, the 1Y stat showing the move in dollars, and -11.7% on the right of the range buttons" width="400">
 </p>
+
+The range the panel opens on is **Chart range** on the settings page, or:
 
 ```bash
 omarchy bar set ber.omacoins range 1y      # 7d (default), 30d or 1y at startup
@@ -181,8 +221,11 @@ in the bar itself:
 
 | `display: "icon"` (default) | `display: "full"` |
 |:---:|:---:|
-| <img src="assets/bar-icon.png" alt="The bar showing a single Bitcoin glyph next to the clock" width="320"> | <img src="assets/bar-full.png" alt="The bar showing BTC $79.7k down 1.8 percent next to the clock" width="400"> |
+| <img src="assets/bar-icon.png" alt="The bar showing a single Bitcoin glyph next to the clock" width="320"> | <img src="assets/bar-full.png" alt="The bar showing BTC $79.6k down 1.5 percent next to the clock" width="400"> |
 | the glyph; hover for the price | price and 24h movement, inline |
+
+The **Show price in the bar** switch on the settings page flips between the
+two, and **Bar icon** takes any glyph the bar font carries. Or:
 
 ```bash
 omarchy bar set ber.omacoins display full    # 'icon' to go back
@@ -190,7 +233,7 @@ omarchy bar set ber.omacoins icon ""        # any glyph the bar font carries
 ```
 
 <p align="center">
-  <img src="assets/bar-full-pill.png" alt="The bar in full mode showing BTC $79.6k down 1.7 percent, with the panel open beneath it and XRP featured" width="400">
+  <img src="assets/bar-full-pill.png" alt="The bar in full mode showing BTC $79.6k down 1.5 percent, with the panel open beneath it and XRP featured" width="400">
 </p>
 
 ## Currency
@@ -198,6 +241,8 @@ omarchy bar set ber.omacoins icon ""        # any glyph the bar font carries
 Any CoinGecko `vs_currency` works: `usd` (default), `eur`, `gbp`, `jpy`, `chf`,
 even `btc`. Prices, highs and lows, market caps and portfolio values all
 follow it. Common codes get their symbol; anything unmapped shows its code.
+
+Pick it from **Currency** on the settings page (type to search the list), or:
 
 ```bash
 omarchy bar set ber.omacoins currency eur
@@ -212,7 +257,8 @@ fills and charts sit in the same colors as the rest of your desktop. Switching
 themes recolors the panel live.
 
 <p align="center">
-  <img src="assets/panel-theme.png" alt="The panel under a different Omarchy theme, its badges and chart drawn in that theme's own colors over a night-sky wallpaper" width="400">
+  <img src="assets/panel-theme-1.png" alt="The panel under a blue-grey Omarchy theme: badges, chart and highlights drawn in that theme's muted blues" width="300">
+  <img src="assets/panel-theme-2.png" alt="The same panel under a black-and-white theme: the chart and badges in plain white on black" width="300">
 </p>
 
 ## Keyboard and keybindings
@@ -225,7 +271,7 @@ While the panel is open:
 | `↑` `↓` or `j` `k` | Feature the previous / next watchlist coin |
 | `1` `2` `3` | Chart range: 7D, 1M, 1Y |
 | `Tab` | Jump to the neighbouring bar panel |
-| `Esc` | Close |
+| `Esc` | Close (on the settings page: back to the coins) |
 
 Plugins never install keybindings — those belong to you, in
 `~/.config/hypr/bindings.lua`. To open the panel from the keyboard:
@@ -240,25 +286,26 @@ o.bind("SUPER + CTRL + P", "Portfolio", "omarchy-shell ber.omacoins portfolio")
 ```
 
 The plugin's IPC target accepts `open`, `close`, `toggle`, `refresh`,
-`watchlist` and `portfolio`. Pick any free combo; check yours with
+`watchlist`, `portfolio` and `settings`. Pick any free combo; check yours with
 `omarchy menu keybindings --print`.
 
 ## Settings
 
-| Setting | Default | Notes |
-|---|---|---|
-| `display` | `icon` | `icon` is a single glyph; `full` puts price and movement in the bar. |
-| `icon` | ₿ | The icon-mode glyph, nf-fa-btc (U+F15A). Any character the bar font carries. |
-| `currency` | `usd` | Any CoinGecko `vs_currency`. |
-| `coins` | empty | Comma-separated CoinGecko ids. Empty means the top coins by market cap. |
-| `count` | `5` | How many rows the watchlist lists, 1 to 25. |
-| `refreshMinutes` | `3` | Auto-refresh interval, minimum 1. |
-| `portfolio` | `~/.config/omacoins/portfolio.json` | Holdings file for the portfolio tab. `~` expands. |
-| `tab` | `watchlist` | Tab shown at startup: `watchlist` or `portfolio`. |
-| `range` | `7d` | Chart range at startup: `7d`, `30d` or `1y`. |
+| Setting | Default | On the settings page | Notes |
+|---|---|---|---|
+| `display` | `icon` | Show price in the bar | `icon` is a single glyph; `full` puts price and movement in the bar. |
+| `currency` | `usd` | Currency | Any CoinGecko `vs_currency`; the page lists the fiat ones plus BTC and ETH. |
+| `count` | `5` | Top coins | How many top coins to list while `coins` is empty, 1 to 25. A named list is always shown whole. |
+| `refreshMinutes` | `3` | Refresh | Auto-refresh interval in minutes, minimum 1. |
+| `tab` | `watchlist` | Open on | Tab shown at startup: `watchlist` or `portfolio`. |
+| `range` | `7d` | Chart range | Chart range at startup: `7d`, `30d` or `1y`. |
+| `icon` | ₿ | Bar icon | The icon-mode glyph, nf-fa-btc (U+F15A). Any character the bar font carries. |
+| `portfolio` | `~/.config/omacoins/portfolio.json` | Portfolio file | Holdings file for the portfolio tab. `~` expands. |
+| `coins` | empty | Watchlist | Comma-separated CoinGecko ids. Empty means the top coins by market cap. |
 
-Settings hot-reload on save. `omarchy bar set` is the easiest way to change
-one, or edit the entry in `~/.config/omarchy/shell.json` directly:
+Settings hot-reload on save, whichever way they were changed. Besides the
+settings page and `omarchy bar set`, the entry in `~/.config/omarchy/shell.json`
+can be edited directly:
 
 ```jsonc
 {

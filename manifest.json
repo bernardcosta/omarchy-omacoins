@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "ber.omacoins",
   "name": "Omacoins",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": "ber",
   "description": "Crypto watchlist and portfolio: coin prices, 24h movement and what your holdings are worth, in the bar",
   "kinds": [

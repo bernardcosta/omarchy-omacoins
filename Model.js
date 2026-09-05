@@ -52,17 +52,28 @@ function currencySymbol(code) {
   return CURRENCY_SYMBOLS[c] !== undefined ? CURRENCY_SYMBOLS[c] : c.toUpperCase() + " "
 }
 
+// `count` only sizes the page for a top-N request. With ids named, the page
+// is as long as the list (CoinGecko caps a page at 250): a per_page smaller
+// than the list silently drops coins from the answer, and which ones is up
+// to CoinGecko.
 function marketsUrl(customCoins, count, currency) {
+  var ids = coinIdList(customCoins)
+  var perPage = ids.length > 0 ? Math.min(250, ids.length) : Math.max(1, parseInt(count, 10) || 1)
   var url = "https://api.coingecko.com/api/v3/coins/markets"
     + "?vs_currency=" + encodeURIComponent(normalizedCurrency(currency))
     + "&order=market_cap_desc"
     + "&page=1"
     + "&price_change_percentage=24h"
     + "&sparkline=true"
-    + "&per_page=" + count
-  var coins = String(customCoins || "").trim().replace(/\s+/g, "")
-  if (coins !== "") url += "&ids=" + encodeURIComponent(coins)
+    + "&per_page=" + perPage
+  if (ids.length > 0) url += "&ids=" + encodeURIComponent(ids.join(","))
   return url
+}
+
+// The ids a /coins/markets URL asks for, normalised; "" for a top-N request.
+function urlIds(url) {
+  var m = String(url || "").match(/[?&]ids=([^&]*)/)
+  return m ? joinCoinIds(decodeURIComponent(m[1]).split(",")) : ""
 }
 
 // portfolio.json → [{id, amount}], in file order. Accepts an id→amount map
@@ -470,31 +481,16 @@ function coinInfo(id, rowSets, known) {
   return { symbol: id.toUpperCase(), name: "", priced: false }
 }
 
-function coinEditRows(ids, rowSets, known) {
-  var out = []
-  for (var i = 0; i < (ids || []).length; i++) {
-    var info = coinInfo(ids[i], rowSets, known)
-    out.push({ id: ids[i], symbol: info.symbol, name: info.name, priced: info.priced })
-  }
-  return out
-}
-
-// Holdings in file order (not by value, so a row does not jump while its
-// amount is being typed), each with its live coin when priced.
-function holdingEditRows(holdings, rowSets, known) {
-  var out = []
-  for (var i = 0; i < (holdings || []).length; i++) {
-    var h = holdings[i]
-    var info = coinInfo(h.id, rowSets, known)
-    out.push({ id: h.id, symbol: info.symbol, name: info.name, priced: info.priced, amount: h.amount })
-  }
-  return out
-}
-
-// Amount as typed: "0.5", "1,000.25", " 12 ". null when it is not a
-// positive finite number, which is what parseHoldings would drop anyway.
+// Amount as typed: "0.5", "0,5", "1,000,000.25", " 12 ". A single comma
+// with no dot is a decimal point ("1,325" is 1.325 — on a comma-decimal
+// keyboard that is the key, and nobody types a thousands separator into
+// an amount field); commas are only thousands separators when there is a
+// dot as well or more than one of them. null when it is not a positive
+// finite number, which is what parseHoldings would drop anyway.
 function parseAmount(text) {
-  var s = String(text || "").trim().replace(/,/g, "")
+  var s = String(text || "").trim()
+  if (/^[0-9]*,[0-9]+$/.test(s)) s = s.replace(",", ".")
+  else if (/^[0-9]{1,3}(,[0-9]{3})+(\.[0-9]+)?$/.test(s)) s = s.replace(/,/g, "")
   if (s === "" || !/^[0-9]*\.?[0-9]+$|^[0-9]+\.?[0-9]*$/.test(s)) return null
   var n = Number(s)
   return (isFinite(n) && n > 0) ? n : null
@@ -512,6 +508,8 @@ function editableAmount(value) {
 function holdingsWith(holdings, id, amount) {
   id = String(id || "").trim().toLowerCase()
   var n = Number(amount)
+  // A bad amount must not turn into a deletion downstream.
+  if (id === "" || !isFinite(n) || n <= 0) return holdingsWithout(holdings, "")
   var out = []
   var replaced = false
   for (var i = 0; i < (holdings || []).length; i++) {
@@ -537,13 +535,18 @@ function holdingsWithout(holdings, id) {
 
 // portfolio.json text in the documented id → amount form, one holding per
 // line. Whatever shape the file had before, this is the shape it gets.
+// Amounts are written so they read back as the same number: the plain
+// form where it round-trips, JSON's shortest form otherwise.
 function serializeHoldings(holdings) {
   var lines = []
   for (var i = 0; i < (holdings || []).length; i++) {
     var h = holdings[i]
     var n = Number(h.amount)
     if (!h.id || !isFinite(n) || n <= 0) continue
-    lines.push("  " + JSON.stringify(String(h.id)) + ": " + editableAmount(n))
+    var plain = editableAmount(n)
+    var text = Number(plain) === n ? plain : JSON.stringify(n)
+    if (!(Number(text) > 0)) continue
+    lines.push("  " + JSON.stringify(String(h.id)) + ": " + text)
   }
   return lines.length === 0 ? "{}\n" : "{\n" + lines.join(",\n") + "\n}\n"
 }
@@ -691,6 +694,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     parseMarkets: parseMarkets,
     marketsUrl: marketsUrl,
+    urlIds: urlIds,
     normalizedCurrency: normalizedCurrency,
     currencySymbol: currencySymbol,
     thousands: thousands,
@@ -727,8 +731,6 @@ if (typeof module !== "undefined") {
     withCoin: withCoin,
     withoutCoin: withoutCoin,
     coinInfo: coinInfo,
-    coinEditRows: coinEditRows,
-    holdingEditRows: holdingEditRows,
     parseAmount: parseAmount,
     editableAmount: editableAmount,
     holdingsWith: holdingsWith,

@@ -30,8 +30,10 @@ QtObject {
   property bool failed: false
   property int retries: 0
   property bool queued: false
-  // Symbol the published rows were priced in; empty until the first success.
+  // Symbol the published rows were priced in, and the URL they answer;
+  // both empty until the first success.
   property string rowsSymbol: ""
+  property string rowsUrl: ""
   property string pendingUrl: ""
   property string pendingSymbol: ""
   property string queuedUrl: ""
@@ -68,6 +70,7 @@ QtObject {
     failed = false
     retries = 0
     rowsSymbol = ""
+    rowsUrl = ""
   }
 
   function request(url, symbol) {
@@ -124,6 +127,7 @@ QtObject {
           return
         }
         feed.rowsSymbol = feed.pendingSymbol
+        feed.rowsUrl = feed.pendingUrl
         feed.rows = parsed
         feed.updatedAt = new Date()
         feed.retries = 0

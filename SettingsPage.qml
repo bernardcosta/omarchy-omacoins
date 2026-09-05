@@ -159,9 +159,13 @@ FocusScope {
     }
     Text {
       textFormat: Text.PlainText
+      anchors.left: titleText.right
+      anchors.leftMargin: Style.space(16)
       anchors.right: parent.right
       anchors.rightMargin: Style.space(16)
       anchors.baseline: titleText.baseline
+      horizontalAlignment: Text.AlignRight
+      elide: Text.ElideLeft
       visible: section.hint !== ""
       text: section.hint
       color: page.dim
@@ -238,6 +242,41 @@ FocusScope {
     fontFamily: page.fontFamily
   }
 
+  // A text field mirroring one string setting: shows the stored value,
+  // commits on Enter or focus loss, Esc puts the stored value back.
+  component SettingField: TextField {
+    property string current: ""
+    signal commit(string value)
+
+    foreground: page.fg
+    font.family: page.fontFamily
+    font.pixelSize: Style.font.body
+    verticalPadding: Style.space(3)
+    text: current
+    // Typing breaks the `text` binding, so a value arriving from outside
+    // (the CLI, a hand edit of shell.json) is pushed in by hand.
+    onCurrentChanged: if (!activeFocus) text = current
+
+    function finish() {
+      if (text !== current) commit(text)
+      // The setter may normalise (trim) to what was already stored, in
+      // which case `current` never changes; show what is stored either way.
+      text = current
+    }
+
+    onEditingFinished: finish()
+    Keys.onPressed: function(event) {
+      if (event.key === Qt.Key_Escape) {
+        text = current
+        page.unfocus()
+        event.accepted = true
+      } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+        page.unfocus()
+        event.accepted = true
+      }
+    }
+  }
+
   // Search box for a coin. Up/Down walk the suggestions under it, Enter
   // picks, Esc clears and hands the keyboard back to the panel.
   component CoinSearchField: TextField {
@@ -255,8 +294,10 @@ FocusScope {
       cursor = 0
     }
 
+    readonly property bool fresh: feed !== null && feed.query === text.trim()
+
     Keys.onPressed: function(event) {
-      var n = feed ? feed.results.length : 0
+      var n = feed && fresh ? feed.results.length : 0
       if (event.key === Qt.Key_Escape) {
         text = ""
         if (feed) feed.clear()
@@ -286,18 +327,22 @@ FocusScope {
     width: parent ? parent.width : 0
     spacing: 0
     visible: suggestions.field && suggestions.field.text.trim().length >= 2
+    // Results answer `feed.query`; while the field has moved on they are
+    // for a question no longer asked, and Enter must not pick from them.
+    readonly property bool fresh: suggestions.feed && suggestions.field && suggestions.feed.query === suggestions.field.text.trim()
+    readonly property var shown: fresh ? suggestions.feed.results : []
 
     Text {
       textFormat: Text.PlainText
-      visible: suggestions.feed && suggestions.feed.results.length === 0
+      visible: suggestions.shown.length === 0
       x: Style.space(16)
       width: parent.width - Style.space(32)
       height: Style.space(26)
       verticalAlignment: Text.AlignVCenter
       text: !suggestions.feed ? ""
-        : suggestions.feed.busy ? "Searching CoinGecko…"
+        : (suggestions.feed.busy || !suggestions.fresh) ? "Searching CoinGecko…"
         : suggestions.feed.failed ? "CoinGecko is rate limiting — try again in a moment"
-        : suggestions.feed.query !== "" ? "No coins match" : ""
+        : "No coins match"
       color: page.dim
       font.family: page.fontFamily
       font.pixelSize: Style.font.caption
@@ -306,7 +351,7 @@ FocusScope {
     }
 
     Repeater {
-      model: suggestions.feed ? suggestions.feed.results : []
+      model: suggestions.shown
 
       Rectangle {
         required property var modelData
@@ -422,13 +467,13 @@ FocusScope {
     }
 
     SettingRow {
-      visible: !page.customWatchlist
       label: "Top coins"
-      description: "How many coins to list while the watchlist is empty."
+      description: "How many coins to list while the watchlist below is empty."
 
       NumberField {
         from: 1
         to: 25
+        Keys.onEscapePressed: page.unfocus()
         value: panel ? panel.coinCount : 5
         fieldWidth: Style.space(92)
         foreground: page.fg
@@ -444,6 +489,7 @@ FocusScope {
       NumberField {
         from: 1
         to: 1440
+        Keys.onEscapePressed: page.unfocus()
         value: panel ? panel.refreshMinutes : 3
         fieldWidth: Style.space(92)
         foreground: page.fg
@@ -454,24 +500,97 @@ FocusScope {
 
     PanelSeparator { foreground: page.fg }
 
-    // ---- Watchlist
+    // ---- Startup and files
+    SectionTitle { text: "STARTUP" }
+
+    SettingRow {
+      label: "Open on"
+      description: "Tab shown when the panel opens."
+
+      ButtonGroup {
+        options: [{ value: "watchlist", label: "Watchlist" }, { value: "portfolio", label: "Portfolio" }]
+        value: panel ? panel.initialTab : "watchlist"
+        focusable: false
+        foreground: page.fg
+        background: "transparent"
+        fontFamily: page.fontFamily
+        fontSize: Style.font.bodySmall
+        onChanged: function(v) { if (panel) panel.setTab(v) }
+      }
+    }
+
+    SettingRow {
+      label: "Chart range"
+      description: "Range selected when the panel opens."
+
+      ButtonGroup {
+        options: [{ value: "7d", label: "7D" }, { value: "30d", label: "1M" }, { value: "1y", label: "1Y" }]
+        value: panel ? panel.initialRange : "7d"
+        focusable: false
+        foreground: page.fg
+        background: "transparent"
+        fontFamily: page.fontFamily
+        fontSize: Style.font.bodySmall
+        onChanged: function(v) { if (panel) panel.setRange(v) }
+      }
+    }
+
+    SettingRow {
+      label: "Bar icon"
+      description: "Glyph shown in icon mode. Empty restores ₿."
+
+      SettingField {
+        width: Style.space(72)
+        horizontalAlignment: TextInput.AlignHCenter
+        placeholderText: ""
+        current: panel ? panel.iconSetting : ""
+        onCommit: function(v) { if (panel) panel.setIcon(v) }
+      }
+    }
+
+    Column {
+      x: Style.space(16)
+      width: parent.width - Style.space(32)
+      spacing: Style.space(6)
+
+      Text {
+        textFormat: Text.PlainText
+        text: "Portfolio file"
+        color: page.fg
+        font.family: page.fontFamily
+        font.pixelSize: Style.font.subtitle
+        font.bold: true
+      }
+
+      SettingField {
+        width: parent.width
+        placeholderText: "~/.config/omacoins/portfolio.json"
+        current: panel ? panel.portfolioSetting : ""
+        onCommit: function(v) { if (panel) panel.setPortfolioPath(v) }
+      }
+    }
+
+    PanelSeparator { foreground: page.fg }
+
+    // ---- Watchlist: the `coins` setting, one row per id.
     SectionTitle {
       text: "WATCHLIST"
       hint: page.customWatchlist
-        ? (panel.watchlistEditRows.length + (panel.watchlistEditRows.length === 1 ? " COIN" : " COINS"))
-        : (panel ? "TOP " + panel.coinCount + " BY MARKET CAP" : "")
+        ? (panel.watchlistIds.length + (panel.watchlistIds.length === 1 ? " COIN" : " COINS"))
+        : "EMPTY"
     }
 
     Text {
       textFormat: Text.PlainText
-      visible: panel && panel.watchlistEditRows.length === 0
+      visible: !page.customWatchlist
       x: Style.space(16)
       width: parent.width - Style.space(32)
-      text: page.customWatchlist ? "No coins yet." : "Waiting for the market list…"
+      text: "Empty, so the panel shows the top " + (panel ? panel.coinCount : 5) + " coins by market cap. Add a coin to keep a list of your own."
       color: page.dim
       font.family: page.fontFamily
       font.pixelSize: Style.font.body
       font.italic: true
+      wrapMode: Text.WordWrap
     }
 
     Column {
@@ -479,17 +598,18 @@ FocusScope {
       spacing: Style.space(2)
 
       Repeater {
-        model: panel ? panel.watchlistEditRows : []
+        model: panel ? panel.watchlistIds : []
 
         CoinRow {
-          required property var modelData
-          symbol: modelData.symbol
-          name: modelData.name
-          priced: modelData.priced
-          unpricedText: panel && panel.marketsAnswered ? "not a CoinGecko id" : ""
+          required property string modelData
+          readonly property var info: panel ? panel.coinInfoFor(modelData) : null
+          symbol: info ? info.symbol : modelData.toUpperCase()
+          name: info ? info.name : ""
+          priced: info ? info.priced : false
+          unpricedText: panel && panel.marketsCurrent ? "not a CoinGecko id" : ""
 
           RemoveButton {
-            onClicked: if (panel) panel.removeWatchCoin(modelData.id)
+            onClicked: if (panel) panel.removeWatchCoin(modelData)
           }
         }
       }
@@ -517,12 +637,13 @@ FocusScope {
         id: resetButton
         anchors.left: parent.left
         anchors.leftMargin: Style.space(16)
-        text: "Back to top " + (panel ? panel.coinCount : 5) + " by market cap"
+        text: "Clear the list"
+        tooltipText: "Same as: omarchy bar set ber.omacoins coins \"\""
         bordered: true
         foreground: page.fg
         fontFamily: page.fontFamily
         fontSize: Style.font.caption
-        onClicked: if (panel) panel.resetWatchlist()
+        onClicked: if (panel) panel.clearWatchlist()
       }
     }
 
@@ -536,7 +657,7 @@ FocusScope {
 
     Text {
       textFormat: Text.PlainText
-      visible: panel && panel.holdingEditRows.length === 0 && !page.pendingHolding
+      visible: panel && panel.holdings.length === 0 && !page.pendingHolding
       x: Style.space(16)
       width: parent.width - Style.space(32)
       text: "No holdings yet. Add a coin and how much of it you hold; it never leaves this machine."
@@ -552,16 +673,16 @@ FocusScope {
       spacing: Style.space(2)
 
       Repeater {
-        id: holdingsRepeater
-        model: panel ? panel.holdingEditRows : []
+        model: panel ? panel.holdings : []
 
         CoinRow {
           id: holdingRow
           required property var modelData
-          symbol: modelData.symbol
-          name: modelData.name
-          priced: modelData.priced
-          unpricedText: panel && panel.portfolioAnswered ? "not a CoinGecko id" : ""
+          readonly property var info: panel ? panel.coinInfoFor(modelData.id) : null
+          symbol: info ? info.symbol : String(modelData.id).toUpperCase()
+          name: info ? info.name : ""
+          priced: info ? info.priced : false
+          unpricedText: panel && panel.portfolioCurrent ? "not a CoinGecko id" : ""
 
           Row {
             spacing: Style.space(4)
@@ -581,9 +702,9 @@ FocusScope {
               property string committed: ""
               Component.onCompleted: committed = text
 
-              // The write rebuilds these rows, which would pull this field
-              // out from under a handler still running — so it is deferred
-              // until the handler is done.
+              // The write replaces the holdings, and with them these rows;
+              // deferring it keeps this handler out of a delegate being
+              // torn down.
               function commit() {
                 if (text === committed) return
                 var n = Model.parseAmount(text)

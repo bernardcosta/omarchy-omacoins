@@ -103,7 +103,8 @@ loosen any of these — a plugin that hammers the endpoint gets everyone's IP
 throttled.
 
 One request per feed covers price, 24h change and sparkline for every coin
-listed, so coin count never costs extra requests; a portfolio costs exactly one
+listed (`per_page` is sized to the id list — smaller and CoinGecko silently
+drops coins), so coin count never costs extra requests; a portfolio costs exactly one
 more per refresh, and only a change in *which* ids are held triggers it early.
 Keep it that way. The month and year chart ranges go to DefiLlama, only when
 selected, then cached; please keep them lazy and sequential, and keep every

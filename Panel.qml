@@ -94,8 +94,11 @@ Panel {
   // Read here as well as in BarWidget so the settings page can show it.
   readonly property string displayMode: String(setting("display", "icon") || "icon").toLowerCase()
 
-  // The panel never grows past this; the body scrolls instead.
-  readonly property int maxPanelHeight: Style.space(600)
+  // The coin pages size the panel to their content and never scroll. The
+  // settings page keeps a fixed height — the coin page's, or this floor if
+  // that is shorter — and scrolls inside it, so opening the gear never
+  // shrinks the panel.
+  readonly property int settingsMinHeight: Style.space(520)
 
   // ---- Settings page. Writes go through the shell's own inline-entry
   //      updater (what `omarchy bar set` ends up calling), applied locally
@@ -149,20 +152,33 @@ Panel {
     knownCoins = next
   }
 
-  // What the watchlist section edits: the custom list, or — while there is
-  // none — the top-N ids on screen, so the first add or remove turns the
-  // list the user is looking at into a custom one instead of starting over.
-  readonly property var watchlistIds: {
-    if (customCoins !== "") return Model.coinIdList(customCoins)
-    var ids = []
-    for (var i = 0; i < rows.length; i++) ids.push(rows[i].id)
-    return ids
+  // What the watchlist section edits: the `coins` setting, literally. An
+  // empty list is `coins ""` — the panel shows the top N — and the first
+  // coin added starts a list of one, exactly as the CLI would.
+  readonly property var watchlistIds: Model.coinIdList(customCoins)
+
+  // Name and ticker for an id, from either feed's rows or this session's
+  // search picks. The settings lists bind through this function per row,
+  // so a price refresh renames rows in place instead of rebuilding them
+  // out from under a field being typed in.
+  function coinInfoFor(id) {
+    return Model.coinInfo(id, [portfolioFeed.rows, rows], knownCoins)
   }
-  readonly property var watchlistEditRows: Model.coinEditRows(watchlistIds, [rows, portfolioFeed.rows], knownCoins)
-  readonly property var holdingEditRows: Model.holdingEditRows(holdings, [portfolioFeed.rows, rows], knownCoins)
-  // Until a feed has answered, an unpriced id is just unpriced — not wrong.
-  readonly property bool marketsAnswered: markets.updatedAt !== null
-  readonly property bool portfolioAnswered: portfolioFeed.updatedAt !== null
+  // A feed's rows are "current" when they answer the request the settings
+  // call for right now. Only then does an id missing from them mean
+  // CoinGecko doesn't know it, rather than that the answer is still on
+  // its way.
+  readonly property bool marketsCurrent: markets.rowsUrl !== "" && markets.rowsUrl === Model.marketsUrl(customCoins, coinCount, currency)
+  readonly property bool portfolioCurrent: portfolioFeed.rowsUrl !== "" && portfolioFeed.rowsUrl === Model.marketsUrl(holdingIds, holdings.length, currency)
+
+  // Remaining settings, mirrored so the page can offer every key the CLI
+  // takes. Raw strings: empty means "default", as `omarchy bar set … ""`.
+  readonly property string iconSetting: String(setting("icon", "") || "")
+  readonly property string portfolioSetting: String(setting("portfolio", "") || "")
+  function setTab(name) { persistSettings({ tab: name === "portfolio" ? "portfolio" : "watchlist" }) }
+  function setRange(name) { persistSettings({ range: Model.normalizedRange(name) }) }
+  function setIcon(glyph) { persistSettings({ icon: String(glyph || "").trim() }) }
+  function setPortfolioPath(path) { persistSettings({ portfolio: String(path || "").trim() }) }
 
   function setWatchlist(ids) { persistSettings({ coins: Model.joinCoinIds(ids) }) }
   function addWatchCoin(coin) {
@@ -170,13 +186,16 @@ Panel {
     setWatchlist(Model.withCoin(watchlistIds, coin.id))
   }
   function removeWatchCoin(id) { setWatchlist(Model.withoutCoin(watchlistIds, id)) }
-  function resetWatchlist() { setWatchlist([]) }
+  function clearWatchlist() { setWatchlist([]) }
 
   // ---- Holdings writes. The file is rewritten whole, in the documented
   //      id → amount form; the new text is applied locally at once, so the
   //      total updates before the write lands. Writes queue behind an
-  //      in-flight one rather than racing it.
+  //      in-flight one rather than racing it, land atomically (temp file
+  //      and rename, so the watcher never reads a half-written file), and
+  //      the file is only re-read once the last of them is down.
   property string holdingsPending: ""
+  readonly property bool holdingsWriting: holdingsWriter.running || holdingsPending !== ""
 
   function setHolding(id, amount, coin) {
     if (coin) rememberCoin(coin)
@@ -194,17 +213,24 @@ Panel {
   }
 
   function flushHoldings() {
-    if (holdingsWriter.running || holdingsPending === "") return
+    if (holdingsWriter.running) return
+    if (holdingsPending === "") {
+      holdingsFile.reload()
+      return
+    }
     var text = holdingsPending
     holdingsPending = ""
-    holdingsWriter.command = ["sh", "-c", 'mkdir -p "$(dirname "$0")" && printf "%s" "$1" > "$0"', root.portfolioPath, text]
+    // Path and text travel as arguments, never inside the script.
+    holdingsWriter.command = ["sh", "-c",
+      'mkdir -p -- "$(dirname -- "$0")" && printf "%s" "$1" > "$0.tmp" && mv -f -- "$0.tmp" "$0"',
+      root.portfolioPath, text]
     holdingsWriter.running = true
   }
 
   Process {
     id: holdingsWriter
-    onExited: {
-      holdingsFile.reload()
+    onExited: function(exitCode) {
+      if (exitCode !== 0) console.warn("omacoins: could not write " + root.portfolioPath + " (exit " + exitCode + ")")
       Qt.callLater(root.flushHoldings)
     }
   }
@@ -216,7 +242,28 @@ Panel {
   // demand and cached.
   HistoryFeed { id: history }
 
-  readonly property var rows: markets.rows
+  // Rows for the list, kept in step with the settings ahead of CoinGecko:
+  // - top N: only a top-N answer counts (ordered by market cap), trimmed to
+  //   the count, so a lower count applies at once;
+  // - a named list: whichever of its ids the last answer priced, so a
+  //   removed coin goes at once and one just added joins when its row
+  //   lands. Anything still missing gets the "fetching" row under the
+  //   list while the request is out. The bar pill keeps the raw rows so
+  //   it does not blink meanwhile.
+  readonly property bool rowsFromTopN: markets.rowsUrl !== "" && Model.urlIds(markets.rowsUrl) === ""
+  readonly property var rows: {
+    var ids = Model.coinIdList(customCoins)
+    if (ids.length === 0) return rowsFromTopN ? markets.rows.slice(0, coinCount) : []
+    var out = []
+    for (var i = 0; i < markets.rows.length; i++) if (ids.indexOf(markets.rows[i].id) >= 0) out.push(markets.rows[i])
+    return out
+  }
+  readonly property int rowsExpected: customCoins === "" ? coinCount : Model.coinIdList(customCoins).length
+  readonly property int rowsMissing: Math.max(0, rowsExpected - rows.length)
+  // Rows still to come: fewer than asked for, and the current request has
+  // not answered yet. Once it has, a missing id is simply one CoinGecko
+  // doesn't know.
+  readonly property bool rowsPending: rowsMissing > 0 && !marketsCurrent
 
   // Currency symbol each feed's rows were priced in. Everything on screen
   // renders from these, not from the live setting: a currency change must
@@ -227,7 +274,7 @@ Panel {
 
   // Bar pill text. A binding rather than an assignment on each response, so
   // the pill tracks the rows the same way the panel rows do.
-  readonly property string label: Model.barLabel(rows, displaySymbol)
+  readonly property string label: Model.barLabel(markets.rows, displaySymbol)
 
   // ---- Holdings. The file is the whole portfolio: {"bitcoin": 0.5, ...}.
   //      It never leaves the machine; only the ids go to CoinGecko.
@@ -341,7 +388,7 @@ Panel {
   }
   readonly property bool chartFailed: {
     if (range === "7d" || chartSeries.length > 1) return false
-    var failedAt = history.failedAt
+    var failedAt = history.failedAt  // read only to re-evaluate when a fetch fails
     for (var i = 0; i < chartIds.length; i++) if (history.failed(chartIds[i], rangeDays)) return true
     return false
   }
@@ -358,7 +405,8 @@ Panel {
       if (portfolio.priced === 0 && portfolioFeed.updatedAt)
         return "None of these ids are on CoinGecko — check " + portfolioPathShort
     }
-    return activeFeed.failed ? "CoinGecko unreachable (rate limit?) — retrying at next refresh" : "Fetching prices…"
+    if (activeFeed.failed) return "CoinGecko unreachable (rate limit?) — retrying at next refresh"
+    return activeFeed.retries > 0 ? "CoinGecko is rate limiting — retrying in a moment…" : "Fetching prices…"
   }
 
   // Movement colors come from the active theme's palette: every Omarchy theme
@@ -387,7 +435,15 @@ Panel {
   // A settings edit should refetch immediately, not wait out the refresh
   // timer — but only the feed it affects.
   onCustomCoinsChanged: Qt.callLater(refreshMarkets)
-  onCoinCountChanged: Qt.callLater(refreshMarkets)
+  // Count changes arrive one click at a time from the settings spinner;
+  // settle before asking CoinGecko, which is rate limited per request.
+  onCoinCountChanged: countSettle.restart()
+
+  Timer {
+    id: countSettle
+    interval: 800
+    onTriggered: root.refreshMarkets()
+  }
   onCurrencyChanged: Qt.callLater(refresh)
   // Amount edits recompute locally; only a change in *which* coins needs
   // CoinGecko again.
@@ -452,11 +508,15 @@ Panel {
     path: root.portfolioPath
     watchChanges: true
     printErrors: false
+    // While the panel is writing, the local text is the truth; a read that
+    // lands between two queued writes would only roll it back.
     onLoaded: {
+      if (root.holdingsWriting) return
       root.portfolioFileFound = true
       root.holdingsText = text()
     }
     onLoadFailed: {
+      if (root.holdingsWriting) return
       root.portfolioFileFound = false
       root.holdingsText = ""
     }
@@ -518,9 +578,8 @@ Panel {
     centerOnBar: true
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(430))
-    // Header stays put; the body under it scrolls once the panel hits its
-    // height cap.
-    contentHeight: panel.fittedContentHeight(header.height + Style.space(12) + coinsScroll.bodyHeight, root.maxPanelHeight)
+    // Header stays put; only the settings body scrolls.
+    contentHeight: panel.fittedContentHeight(header.height + Style.space(12) + coinsScroll.bodyHeight)
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -625,18 +684,20 @@ Panel {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        readonly property real bodyHeight: root.settingsOpen ? settingsPage.implicitHeight : coinsColumn.implicitHeight
+        // What the panel is sized to: the coin page's own height, or on the
+        // settings page that same height with a floor.
+        readonly property real bodyHeight: root.settingsOpen ? Math.max(coinsColumn.implicitHeight, root.settingsMinHeight) : coinsColumn.implicitHeight
         contentWidth: width
-        contentHeight: bodyHeight
+        contentHeight: root.settingsOpen ? settingsPage.implicitHeight : coinsColumn.implicitHeight
         clip: true
         boundsBehavior: Flickable.StopAtBounds
         interactive: contentHeight > height
 
-        // Thin foreground-tinted bar at the right edge, only while there is
-        // something to scroll to.
+        // Thin foreground-tinted bar at the right edge, only on the settings
+        // page and only while there is something to scroll to.
         QQC.ScrollBar.vertical: QQC.ScrollBar {
           id: scrollBar
-          policy: coinsScroll.contentHeight > coinsScroll.height ? QQC.ScrollBar.AlwaysOn : QQC.ScrollBar.AlwaysOff
+          policy: root.settingsOpen && coinsScroll.contentHeight > coinsScroll.height ? QQC.ScrollBar.AlwaysOn : QQC.ScrollBar.AlwaysOff
           contentItem: Rectangle {
             implicitWidth: Style.space(4)
             radius: Style.cornerRadius > 0 ? width / 2 : 0
@@ -697,6 +758,7 @@ Panel {
               spacing: Style.space(8)
 
               Text {
+                textFormat: Text.PlainText
                 id: heroSymbol
                 text: root.hero ? root.hero.title : ""
                 color: root.bar.foreground
@@ -706,6 +768,7 @@ Panel {
                 font.letterSpacing: 1
               }
               Text {
+                textFormat: Text.PlainText
                 id: heroName
                 // The portfolio hero has no subtitle; hiding it keeps the
                 // Row from spacing around an empty item.
@@ -759,6 +822,7 @@ Panel {
                   required property var modelData
                   spacing: Style.space(5)
                   Text {
+                    textFormat: Text.PlainText
                     text: parent.modelData.label
                     color: Qt.darker(root.bar.foreground, 1.5)
                     font.family: root.bar.fontFamily
@@ -766,6 +830,7 @@ Panel {
                     font.letterSpacing: 1
                   }
                   Text {
+                    textFormat: Text.PlainText
                     text: parent.modelData.value
                     color: root.bar.foreground
                     font.family: root.bar.fontFamily
@@ -780,6 +845,7 @@ Panel {
           //      size. HorizontalFit stays as the fallback, so it only
           //      shrinks if the value outgrows the panel itself.
           Text {
+            textFormat: Text.PlainText
             id: heroPrice
             visible: !!root.hero
             x: Style.space(16)
@@ -977,6 +1043,7 @@ Panel {
                 color: (selected || (modelData.selectable && rowArea.containsMouse)) ? Style.hoverFillFor(root.bar.foreground, Color.accent) : "transparent"
 
                 Text {
+                  textFormat: Text.PlainText
                   id: rankText
                   anchors.left: parent.left
                   anchors.leftMargin: Style.space(16)
@@ -998,6 +1065,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   id: symbolText
                   anchors.left: rankText.right
                   anchors.verticalCenter: parent.verticalCenter
@@ -1016,6 +1084,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   anchors.left: symbolText.right
                   anchors.right: priceText.left
                   anchors.rightMargin: Style.space(12)
@@ -1028,6 +1097,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   id: priceText
                   anchors.right: changeBadge.left
                   anchors.rightMargin: Style.space(14)
@@ -1066,6 +1136,50 @@ Panel {
                   cursorShape: modelData.selectable ? Qt.PointingHandCursor : Qt.ArrowCursor
                   onClicked: if (modelData.selectable) root.selectedIndex = index
                 }
+              }
+            }
+          }
+
+          // ---- Rows on their way: a lower count or a removed coin apply at
+          //      once above; this row stands in for what a higher count or
+          //      an added coin is still waiting on.
+          Item {
+            visible: !root.portfolioView && root.rows.length > 0 && (root.rowsPending || (root.rowsMissing > 0 && markets.failed))
+            width: parent.width
+            height: Style.space(32)
+
+            Row {
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(16)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(8)
+
+              Text {
+                id: fetchSpinner
+                visible: !markets.failed
+                anchors.verticalCenter: parent.verticalCenter
+                text: "󰦖"
+                color: Qt.darker(root.bar.foreground, 1.5)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+
+                RotationAnimator on rotation {
+                  running: fetchSpinner.visible
+                  from: 0; to: 360
+                  duration: 900
+                  loops: Animation.Infinite
+                }
+              }
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: markets.failed ? "CoinGecko unreachable (rate limit?) — retrying at next refresh"
+                    : markets.retries > 0 ? "CoinGecko is rate limiting — retrying in a moment…"
+                    : "Fetching " + root.rowsMissing + " more…"
+                color: Qt.darker(root.bar.foreground, 1.5)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                font.italic: true
               }
             }
           }

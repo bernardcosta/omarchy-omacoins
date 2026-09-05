@@ -66,7 +66,35 @@ BarWidget {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  onBarChanged: injectPanel()
+  // A local-plugin reload (a file changed under the plugin directory) has
+  // the bar rebuild this widget and hand it the settings its slot was
+  // mounted with. Settings written since — `omarchy bar set`, the panel's
+  // settings page — were only patched into the bar's live layout, so that
+  // is the fresher copy; adopt it once the bar has finished injecting.
+  // Same values on a normal start, so this changes nothing there.
+  function adoptBarSettings() {
+    if (!root.bar || !root.bar.layoutConfig) return
+    var layout = root.bar.layoutConfig
+    var regions = ["left", "center", "right"]
+    for (var r = 0; r < regions.length; r++) {
+      var entries = layout[regions[r]] || []
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i]
+        if (!e || typeof e !== "object" || String(e.id || "") !== root.moduleName) continue
+        var fresh = {}
+        for (var k in e) if (k !== "id") fresh[k] = e[k]
+        var current = {}
+        for (var c in root.settings) if (c !== "id") current[c] = root.settings[c]
+        if (JSON.stringify(fresh) !== JSON.stringify(current)) root.settings = fresh
+        return
+      }
+    }
+  }
+
+  onBarChanged: {
+    injectPanel()
+    Qt.callLater(adoptBarSettings)
+  }
   onSettingsChanged: injectPanel()
 
   Loader {

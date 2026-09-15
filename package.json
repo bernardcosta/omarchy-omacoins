@@ -1,0 +1,13 @@
+{
+  "name": "omarchy-omacoins",
+  "version": "0.0.0-development",
+  "private": true,
+  "description": "Release tooling only. The plugin itself has no build step and no runtime dependencies.",
+  "license": "MIT",
+  "devDependencies": {
+    "@semantic-release/changelog": "7.0.0",
+    "@semantic-release/exec": "7.1.0",
+    "@semantic-release/git": "11.0.1",
+    "semantic-release": "25.0.9"
+  }
+}

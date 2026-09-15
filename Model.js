@@ -6,7 +6,7 @@ function parseMarkets(raw) {
     if (!Array.isArray(data)) return []
 
     var out = []
-    for (var i = 0; i < data.length; i++) {
+    for (var i = 0; i < data.length && out.length < MAX_ROWS; i++) {
       var c = data[i]
       if (!c || !c.symbol || c.current_price === undefined || c.current_price === null) continue
       out.push({
@@ -21,7 +21,8 @@ function parseMarkets(raw) {
         high24h: (c.high_24h === undefined || c.high_24h === null) ? null : Number(c.high_24h),
         low24h: (c.low_24h === undefined || c.low_24h === null) ? null : Number(c.low_24h),
         marketCap: (c.market_cap === undefined || c.market_cap === null) ? null : Number(c.market_cap),
-        sparkline: (c.sparkline_in_7d && Array.isArray(c.sparkline_in_7d.price)) ? c.sparkline_in_7d.price : []
+        sparkline: (c.sparkline_in_7d && Array.isArray(c.sparkline_in_7d.price))
+          ? c.sparkline_in_7d.price.slice(-MAX_SPARKLINE_POINTS) : []
       })
     }
     return out
@@ -30,9 +31,27 @@ function parseMarkets(raw) {
   }
 }
 
+// Every fetch: HTTPS only (no downgrade, even by redirect), a wall-clock
+// limit, and a body cap. curl aborts an oversize body mid-transfer (exit
+// 63; since 8.4.0 that holds for chunked responses too), leaving at most a
+// truncated body that no parser accepts, so the feeds fail closed and
+// retry rather than buffer whatever a compromised endpoint sends.
+var MAX_BODY_BYTES = 2 * 1024 * 1024
+
 function curlCommand(url, maxTime) {
-  return ["curl", "-sS", "--max-time", String(maxTime || 10), url]
+  return ["curl", "-sS", "--proto", "=https", "--max-time", String(maxTime || 10),
+    "--max-filesize", String(MAX_BODY_BYTES), "--", url]
 }
+
+// Ceilings on what a parsed answer may hold, so a hostile body that is
+// under the byte cap still cannot grow rows or series without bound.
+// CoinGecko pages at most 250 coins; a 7d sparkline is 168 hourly points;
+// the longest series requested is a year of daily points.
+var MAX_ROWS = 250
+var MAX_SPARKLINE_POINTS = 200
+var MAX_SERIES_POINTS = 1000
+var MAX_CHART_COINS = 100
+var MAX_SEARCH_SCAN = 100
 
 // Symbols for common CoinGecko vs_currencies; anything unmapped falls back
 // to an uppercase code prefix ("CHF 1,234").
@@ -225,11 +244,13 @@ function parseLlamaChart(raw) {
     var data = JSON.parse(String(raw || ""))
     if (!data || !data.coins || typeof data.coins !== "object") return {}
     var out = {}
+    var coins = 0
     for (var key in data.coins) {
+      if (++coins > MAX_CHART_COINS) break
       var entry = data.coins[key]
       if (!entry || !Array.isArray(entry.prices)) continue
       var series = []
-      for (var i = 0; i < entry.prices.length; i++) {
+      for (var i = 0; i < entry.prices.length && series.length < MAX_SERIES_POINTS; i++) {
         var p = entry.prices[i]
         if (!p || p.price === null || p.price === undefined) continue
         var n = Number(p.price)
@@ -277,7 +298,7 @@ function parseMarketChart(raw) {
     var data = JSON.parse(String(raw || ""))
     if (!data || !Array.isArray(data.prices)) return []
     var out = []
-    for (var i = 0; i < data.prices.length; i++) {
+    for (var i = 0; i < data.prices.length && out.length < MAX_SERIES_POINTS; i++) {
       var p = data.prices[i]
       if (!Array.isArray(p) || p.length < 2 || p[1] === null) continue
       var n = Number(p[1])
@@ -421,7 +442,7 @@ function parseSearch(raw, limit) {
     var data = JSON.parse(String(raw || ""))
     if (!data || !Array.isArray(data.coins)) return null
     var out = []
-    for (var i = 0; i < data.coins.length && out.length < limit; i++) {
+    for (var i = 0; i < data.coins.length && i < MAX_SEARCH_SCAN && out.length < limit; i++) {
       var c = data.coins[i]
       if (!c || !c.id) continue
       out.push({
@@ -720,6 +741,7 @@ if (typeof module !== "undefined") {
     sumSeries: sumSeries,
     rangeChange: rangeChange,
     curlCommand: curlCommand,
+    MAX_BODY_BYTES: MAX_BODY_BYTES,
     coinsPerChartCall: coinsPerChartCall,
     llamaChartUrl: llamaChartUrl,
     parseLlamaChart: parseLlamaChart,

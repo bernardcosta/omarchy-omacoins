@@ -220,9 +220,15 @@ Panel {
     }
     var text = holdingsPending
     holdingsPending = ""
-    // Path and text travel as arguments, never inside the script.
+    // Path and text travel as arguments, never inside the script. The
+    // temp file is created by mktemp (exclusive, 0600, unpredictable name)
+    // in the target directory, so a symlink planted at a guessable name
+    // there cannot redirect the write; rename never follows a link at the
+    // target either, so the file itself being a symlink is replaced, not
+    // written through.
     holdingsWriter.command = ["sh", "-c",
-      'mkdir -p -- "$(dirname -- "$0")" && printf "%s" "$1" > "$0.tmp" && mv -f -- "$0.tmp" "$0"',
+      'd=$(dirname -- "$0") && mkdir -p -- "$d" && t=$(mktemp -- "$d/.portfolio.XXXXXX") || exit 1; '
+      + 'printf "%s" "$1" > "$t" && mv -f -- "$t" "$0" || { rm -f -- "$t"; exit 1; }',
       root.portfolioPath, text]
     holdingsWriter.running = true
   }

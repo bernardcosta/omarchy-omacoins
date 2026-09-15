@@ -2,3 +2,6 @@
 .claude/
 .obsidian/
 CLAUDE.md
+
+# Release tooling
+node_modules/

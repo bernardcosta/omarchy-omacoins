@@ -4,31 +4,31 @@ on:
   push:
     branches: [main]
 
+# The release commit, tag and GitHub release need contents:write; nothing
+# else. Issue/PR commenting by @semantic-release/github is disabled in
+# .releaserc.json so no wider scope is required.
 permissions:
   contents: write
-  issues: write
-  pull-requests: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to full commit SHAs (tag comment for readability).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: lts/*
+          node-version: 24
+          cache: npm
 
-      - name: semantic-release
-        run: >
-          npx --yes
-          -p semantic-release@24
-          -p @semantic-release/changelog@6
-          -p @semantic-release/git@10
-          -p @semantic-release/exec@6
-          semantic-release
+      # Exact versions from package-lock.json, integrity-checked, no
+      # lifecycle scripts.
+      - run: npm ci --ignore-scripts
+
+      - run: npx --no-install semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

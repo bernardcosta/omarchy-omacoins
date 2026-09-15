@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/bernardcosta/omarchy-omacoins/compare/v0.4.0...v0.4.1) (2026-09-15)
+
+
+### Bug Fixes
+
+* bound response bodies, symlink-safe holdings write, pinned release pipeline ([d913956](https://github.com/bernardcosta/omarchy-omacoins/commit/d913956db05d19b3e97403244b61184e0dbcdb59))
+
 # [0.4.0](https://github.com/bernardcosta/omarchy-omacoins/compare/v0.3.0...v0.4.0) (2026-09-05)
 
 
